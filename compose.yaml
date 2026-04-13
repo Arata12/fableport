@@ -1,0 +1,13 @@
+services:
+  cli:
+    build:
+      context: .
+    image: fanfictl:latest
+    user: "1000:1000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      FANFICTL_OUTPUT_DIR: /app/output
+    volumes:
+      - ./output:/app/output
