@@ -1,4 +1,4 @@
-# fanfictl
+# Fableport
 
 Docker-first Pixiv fanfic translator and reader.
 
@@ -17,8 +17,10 @@ It can:
 - **Public reader links** for completed works
 - **Exports**: Markdown, TXT, HTML, EPUB
 - **Checkpoint/resume** support
+- **Single global translation queue** for the web app
 - **Gemini quota tracking**
-- **Fallback API keys** stored in the app volume
+- **Personal and global fallback API keys** stored in the app volume
+- **User accounts** with admin-managed creation
 - **Docker + Caddy labels** for deployment
 
 ## Project docs
@@ -79,8 +81,8 @@ docker compose down
 ### Run CLI commands through Docker
 
 ```bash
-docker compose --profile tools run --rm cli info "https://www.pixiv.net/novel/show.php?id=27402134"
-docker compose --profile tools run --rm cli translate "https://www.pixiv.net/novel/show.php?id=27402134"
+docker compose --profile tools run --rm cli fableport info "https://www.pixiv.net/novel/show.php?id=27402134"
+docker compose --profile tools run --rm cli fableport translate "https://www.pixiv.net/novel/show.php?id=27402134"
 ```
 
 ### Run tests through Docker
@@ -107,11 +109,16 @@ Important ones:
 
 ## Gemini key behavior
 
-- The `.env` key is the **default key**.
-- Extra fallback keys can be added in the dashboard.
-- Fallback keys are stored inside the Docker volume, not in git.
+- The `.env` key is the **system key**.
+- Users can add **personal keys** in Settings.
+- Admins can add **global fallback keys**.
+- Keys are stored inside the Docker volume, not in git.
 - Quota is tracked per key.
-- If the default key is exhausted, the app falls back to the next available key.
+- Key resolution order is: personal keys -> global fallback keys -> system key.
+
+## License
+
+This project is licensed under **AGPL-3.0-or-later**. See [LICENSE](LICENSE).
 
 ## Notes
 

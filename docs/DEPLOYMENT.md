@@ -1,4 +1,4 @@
-# Deployment
+# Fableport Deployment
 
 ## Requirements
 
@@ -24,7 +24,8 @@ The app stores all runtime data there:
 - generated exports
 - job records
 - quota state
-- fallback API keys
+- personal and global fallback API keys
+- user database
 
 ## Required `.env`
 
@@ -64,6 +65,7 @@ Expected result:
 - `app` is `Up`
 - Caddy sees labels from `compose.yaml`
 - `/login` loads successfully
+- web jobs execute one at a time through the global queue
 
 ## Update
 
@@ -95,3 +97,4 @@ The app does not rely on bind-mounted local output directories anymore.
 - Do not use the default `APP_SECRET_KEY`
 - Use a non-trivial `ADMIN_PASSWORD`
 - Extra fallback keys added in the dashboard are stored in the volume, not in `.env`
+- Users can change their passwords inside the app

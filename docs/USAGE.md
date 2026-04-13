@@ -6,6 +6,7 @@
 
 - Open `/login`
 - Sign in with `ADMIN_USERNAME` / `ADMIN_PASSWORD`
+- Admin can create more users in `Settings`
 
 ### Submit a Pixiv work
 
@@ -26,6 +27,8 @@ Jobs move through these stages:
 - exporting
 - completed
 - failed
+
+Only one web translation job runs at a time. Other submitted jobs wait in the global queue.
 
 If the app restarts during a job, the job is marked interrupted/failed and can be submitted again with resume enabled.
 
@@ -75,15 +78,16 @@ The dashboard shows:
 
 The totals reflect all active keys combined.
 
-## Fallback keys
+## Gemini keys
 
-The dashboard supports adding more Gemini keys.
+The dashboard supports personal and global Gemini keys.
 
 Behavior:
 
-- `.env` key remains primary/default
+- users can add personal keys for their own jobs
+- admins can add global fallback keys
+- `.env` key remains the system key
 - extra keys are masked in the UI
-- extra keys can be removed
 - translation automatically falls back when another key is exhausted
 
 ## Limits

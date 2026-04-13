@@ -3,7 +3,7 @@ services:
     build:
       context: .
     image: fanfictl:latest
-    entrypoint: ["fanfictl-web"]
+    entrypoint: ["fableport-web"]
     restart: unless-stopped
     user: "1000:1000"
     env_file:

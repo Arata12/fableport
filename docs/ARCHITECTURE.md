@@ -1,4 +1,4 @@
-# Architecture
+# Fableport Architecture
 
 ## Overview
 
@@ -27,9 +27,10 @@ The project has one shared Python core used by both:
 ### `translate.py`
 
 - wraps Google AI Studio access
-- translates titles and prose chunks
+- translates titles, synopsis, and prose chunks
 - now supports multiple runtime keys
 - uses quota tracking and key fallback
+- normalizes dialogue quotes for English output
 
 ### `workflow.py`
 
@@ -43,21 +44,30 @@ The project has one shared Python core used by both:
 - request-per-day accounting
 - fallback selection across available keys
 
+### `jobs.py`
+
+- persistent queued job records
+- one global worker for web submissions
+- FIFO queue processing
+- queued jobs survive restarts
+
 ### `keystore.py`
 
-- merges the default `.env` key with stored fallback keys
-- stores fallback keys in runtime app data
+- resolves personal keys, global fallback keys, and the system `.env` key
+- stores non-env keys in runtime app data
 - exposes masked summaries for the dashboard
 
 ### `webapp.py`
 
 - login/logout
-- dashboard
+- dashboard tabs: overview, library, settings
 - submit route
 - job pages
 - reader pages
 - public downloads
 - fallback-key management
+- password change
+- admin user creation
 
 ## Persistence
 
@@ -95,9 +105,4 @@ Typical contents:
 
 ## Web auth
 
-Current auth is intentionally simple:
-
-- one admin username/password from `.env`
-- session cookie auth
-
-It is easy to replace later because auth is isolated in the web layer.
+Auth uses stored users in SQLite with a bootstrap admin from `.env`.

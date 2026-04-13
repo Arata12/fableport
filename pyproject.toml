@@ -3,11 +3,15 @@ requires = ["hatchling>=1.25.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "fanfictl"
+name = "fableport"
 version = "0.1.0"
-description = "Translate public Pixiv fanfiction into English"
+description = "Translate public Pixiv fanfiction into English with a hosted reader"
 readme = "README.md"
 requires-python = ">=3.11"
+license = {text = "AGPL-3.0-or-later"}
+classifiers = [
+  "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+]
 dependencies = [
   "bleach>=6.1.0",
   "ebooklib>=0.18",
@@ -25,6 +29,8 @@ dependencies = [
 ]
 
 [project.scripts]
+fableport = "fanfictl.cli:app"
+fableport-web = "fanfictl.webapp:serve"
 fanfictl = "fanfictl.cli:app"
 fanfictl-web = "fanfictl.webapp:serve"
 

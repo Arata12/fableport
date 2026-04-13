@@ -13,5 +13,5 @@ COPY tests ./tests
 
 RUN pip install --no-cache-dir .
 
-ENTRYPOINT ["fanfictl"]
+ENTRYPOINT ["fableport"]
 CMD ["--help"]
