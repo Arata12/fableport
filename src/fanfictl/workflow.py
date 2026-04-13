@@ -1,0 +1,154 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Callable, Iterable
+
+from fanfictl.config import Settings
+from fanfictl.exporters import (
+    build_combined_markdown,
+    write_epub,
+    write_html,
+    write_markdown,
+    write_text,
+)
+from fanfictl.models import Checkpoint, ExportFormat, Work, WorkKind
+from fanfictl.pixiv import PixivClient, parse_pixiv_url
+from fanfictl.storage import (
+    ensure_work_dirs,
+    load_checkpoint,
+    save_checkpoint,
+    save_metadata,
+)
+from fanfictl.translate import GeminiStudioProvider, translate_work
+
+
+ProgressCallback = Callable[[str, int, int, str], None]
+
+
+def fetch_work_from_url(url: str, chapter_limit: int | None = None) -> Work:
+    parsed = parse_pixiv_url(url)
+    client = PixivClient()
+    try:
+        work = (
+            client.fetch_novel_work(parsed.pixiv_id, parsed.url)
+            if parsed.kind == "novel"
+            else client.fetch_series_work(parsed.pixiv_id, parsed.url)
+        )
+    finally:
+        client.close()
+
+    if chapter_limit:
+        work.chapters = work.chapters[:chapter_limit]
+    return work
+
+
+def translate_url_to_outputs(
+    url: str,
+    settings: Settings,
+    *,
+    target: str = "en",
+    output: Path | None = None,
+    formats: Iterable[ExportFormat] = (
+        ExportFormat.MD,
+        ExportFormat.TXT,
+        ExportFormat.HTML,
+        ExportFormat.EPUB,
+    ),
+    resume: bool = False,
+    chapter_limit: int | None = None,
+    model: str | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[Work, Path]:
+    if target.lower() != "en":
+        raise ValueError("v1 only supports English output")
+    if not settings.gemini_api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is required for translation. Put it in .env or your shell environment."
+        )
+
+    if progress_callback:
+        progress_callback("fetching", 0, 0, "Fetching Pixiv work")
+
+    work = fetch_work_from_url(url, chapter_limit=chapter_limit)
+    output_base = (output or settings.output_dir).resolve()
+    work_root = ensure_work_dirs(output_base, work)
+    checkpoint = load_checkpoint(work_root) if resume else None
+    if checkpoint is None:
+        checkpoint = Checkpoint(
+            source_url=work.source_url,
+            kind=work.kind,
+            pixiv_id=work.pixiv_id,
+            original_title=work.original_title,
+            model_name=model or settings.gemini_model,
+        )
+
+    provider = GeminiStudioProvider(
+        api_key=settings.gemini_api_key,
+        model_name=model or settings.gemini_model,
+    )
+
+    if progress_callback:
+        progress_callback("translating", 0, len(work.chapters), "Starting translation")
+
+    work = translate_work(
+        work,
+        provider,
+        checkpoint,
+        checkpoint_callback=lambda cp: save_checkpoint(work_root, cp),
+        progress_callback=progress_callback,
+    )
+
+    save_checkpoint(work_root, checkpoint)
+    save_metadata(work_root, work)
+
+    for chapter in work.chapters:
+        chapter_root = work_root / "chapters"
+        (chapter_root / f"{chapter.position:03d}-source.md").write_text(
+            chapter.source_markdown,
+            encoding="utf-8",
+        )
+        if chapter.translated_markdown:
+            (chapter_root / f"{chapter.position:03d}-translated.md").write_text(
+                chapter.translated_markdown,
+                encoding="utf-8",
+            )
+
+    if progress_callback:
+        progress_callback(
+            "exporting", len(work.chapters), len(work.chapters), "Rendering exports"
+        )
+
+    combined_markdown = build_combined_markdown(work)
+    title = work.translated_title or work.original_title
+    formats = set(formats)
+    if ExportFormat.MD in formats:
+        write_markdown(
+            work_root
+            / ("translated.md" if work.kind == WorkKind.NOVEL else "combined.md"),
+            combined_markdown,
+        )
+    if ExportFormat.TXT in formats:
+        write_text(
+            work_root
+            / ("translated.txt" if work.kind == WorkKind.NOVEL else "combined.txt"),
+            combined_markdown,
+        )
+    if ExportFormat.HTML in formats:
+        write_html(
+            work_root
+            / ("translated.html" if work.kind == WorkKind.NOVEL else "combined.html"),
+            combined_markdown,
+            title,
+        )
+    if ExportFormat.EPUB in formats:
+        write_epub(
+            work_root
+            / ("translated.epub" if work.kind == WorkKind.NOVEL else "combined.epub"),
+            work,
+        )
+
+    if progress_callback:
+        progress_callback("completed", len(work.chapters), len(work.chapters), "Done")
+
+    save_metadata(work_root, work)
+    return work, work_root

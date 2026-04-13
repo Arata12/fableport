@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="layout">
+  <section class="panel panel--wide">
+    <h1>New import</h1>
+    <p class="muted">Paste a public Pixiv novel or series URL. The app translates it into English and stores the Markdown and exports.</p>
+    {% if using_default_admin %}
+      <p class="notice">You are using the default admin credentials. Change <code>ADMIN_USERNAME</code> and <code>ADMIN_PASSWORD</code> in your env later.</p>
+    {% endif %}
+    <form action="/submit" method="post" class="stack-20">
+      <label>
+        <span>Pixiv URL</span>
+        <input name="source_url" type="url" placeholder="https://www.pixiv.net/novel/show.php?id=27402134" required>
+      </label>
+      <div class="grid grid--2">
+        <label>
+          <span>Chapter limit</span>
+          <input name="chapter_limit" type="number" min="1" placeholder="Optional">
+        </label>
+        <label class="checkbox-row">
+          <input name="resume" type="checkbox" value="1">
+          <span>Resume if a checkpoint exists</span>
+        </label>
+      </div>
+      <fieldset>
+        <legend>Exports</legend>
+        <div class="checkbox-grid">
+          <label class="checkbox-row"><input name="export_md" type="checkbox" value="1" checked><span>Markdown</span></label>
+          <label class="checkbox-row"><input name="export_txt" type="checkbox" value="1" checked><span>TXT</span></label>
+          <label class="checkbox-row"><input name="export_html" type="checkbox" value="1" checked><span>HTML</span></label>
+          <label class="checkbox-row"><input name="export_epub" type="checkbox" value="1" checked><span>EPUB</span></label>
+        </div>
+      </fieldset>
+      <button class="button" type="submit">Start translation</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Recent jobs</h2>
+    {% if jobs %}
+      <ul class="item-list">
+        {% for job in jobs %}
+          <li>
+            <a href="/jobs/{{ job.id }}">{{ job.id }}</a>
+            <span class="badge badge--{{ job.status }}">{{ job.status }}</span>
+            <p class="muted small">{{ job.message }}</p>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No jobs yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel panel--wide">
+    <div class="section-head">
+      <h2>Library</h2>
+      <p class="muted">Reader links use {{ base_url }}.</p>
+    </div>
+    {% if works %}
+      <table class="table">
+        <thead>
+          <tr><th>Title</th><th>Author</th><th>Type</th><th>Files</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for entry in works %}
+            <tr>
+              <td>
+                <strong>{{ entry.work.translated_title or entry.work.original_title }}</strong>
+                <div class="muted small">{{ entry.work.original_title }}</div>
+              </td>
+              <td>{{ entry.work.author_name }}</td>
+              <td>{{ entry.work.kind.value }}</td>
+              <td class="small">{{ entry.outputs.keys()|join(', ') }}</td>
+              <td class="actions-cell">
+                <a href="/works/{{ entry.root_name }}">Manage</a>
+                <a href="{{ entry.public_url_path }}">Read</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">No imported works yet.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

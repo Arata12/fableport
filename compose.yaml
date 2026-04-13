@@ -1,13 +1,53 @@
 services:
-  cli:
+  app:
     build:
       context: .
     image: fanfictl:latest
+    entrypoint: ["fanfictl-web"]
+    restart: unless-stopped
     user: "1000:1000"
     env_file:
       - path: .env
         required: false
     environment:
       FANFICTL_OUTPUT_DIR: /app/output
+      APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL in .env}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY in .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?set ADMIN_USERNAME in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemma-4-31b-it}
+      HOST: 0.0.0.0
+      PORT: 8000
     volumes:
-      - ./output:/app/output
+      - fanfictl_data:/app/output
+    labels:
+      caddy: ${APP_DOMAIN:?set APP_DOMAIN in .env}
+      caddy.reverse_proxy: "{{upstreams 8000}}"
+    networks:
+      - default
+      - dockge_default
+
+  cli:
+    build:
+      context: .
+    image: fanfictl:latest
+    profiles: ["tools"]
+    user: "1000:1000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      FANFICTL_OUTPUT_DIR: /app/output
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8000}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemma-4-31b-it}
+    volumes:
+      - fanfictl_data:/app/output
+
+networks:
+  dockge_default:
+    external: true
+
+volumes:
+  fanfictl_data:

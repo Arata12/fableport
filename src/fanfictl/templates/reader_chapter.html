@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="reader-shell">
+  <header class="reader-head">
+    <h1>{{ chapter.translated_title or chapter.original_title }}</h1>
+    <p class="muted"><a href="{{ entry.public_url_path }}">Back to series</a></p>
+  </header>
+  <nav class="chapter-nav">
+    {% if chapter_no > 1 %}<a href="{{ entry.public_url_path }}/{{ chapter_no - 1 }}">Previous</a>{% else %}<span></span>{% endif %}
+    <span class="muted">Chapter {{ chapter_no }} of {{ entry.work.chapters|length }}</span>
+    {% if chapter_no < entry.work.chapters|length %}<a href="{{ entry.public_url_path }}/{{ chapter_no + 1 }}">Next</a>{% else %}<span></span>{% endif %}
+  </nav>
+  <div class="reader-body">{{ body_html|safe }}</div>
+</article>
+{% endblock %}

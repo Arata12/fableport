@@ -27,15 +27,30 @@ def parse_pixiv_url(raw_url: str) -> ParsedPixivUrl:
     query = parse_qs(parsed.query)
 
     if "show.php" in path and "id" in query:
-        return ParsedPixivUrl(kind="novel", pixiv_id=int(query["id"][0]), url=raw_url)
+        novel_id = int(query["id"][0])
+        return ParsedPixivUrl(
+            kind="novel",
+            pixiv_id=novel_id,
+            url=f"https://www.pixiv.net/novel/show.php?id={novel_id}",
+        )
 
     match = SERIES_ID_RE.search(path)
     if match:
-        return ParsedPixivUrl(kind="series", pixiv_id=int(match.group(1)), url=raw_url)
+        series_id = int(match.group(1))
+        return ParsedPixivUrl(
+            kind="series",
+            pixiv_id=series_id,
+            url=f"https://www.pixiv.net/novel/series/{series_id}",
+        )
 
     match = NOVEL_ID_RE.search(raw_url)
     if match:
-        return ParsedPixivUrl(kind="novel", pixiv_id=int(match.group(1)), url=raw_url)
+        novel_id = int(match.group(1))
+        return ParsedPixivUrl(
+            kind="novel",
+            pixiv_id=novel_id,
+            url=f"https://www.pixiv.net/novel/show.php?id={novel_id}",
+        )
 
     raise ValueError("Unsupported Pixiv novel URL")
 

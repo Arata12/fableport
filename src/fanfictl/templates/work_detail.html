@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel panel--wide">
+  <h1>{{ entry.work.translated_title or entry.work.original_title }}</h1>
+  <p class="muted">{{ entry.work.original_title }} · {{ entry.work.author_name }}</p>
+  <div class="actions-row">
+    <a class="button" href="{{ entry.public_url_path }}">Open public reader</a>
+    {% for fmt, filename in entry.outputs.items() %}
+      <a class="button button--ghost" href="/download/{{ entry.work.public_id }}/{{ fmt }}">{{ fmt|upper }}</a>
+    {% endfor %}
+  </div>
+  <div class="meta-grid">
+    <div><span class="muted">Kind</span><strong>{{ entry.work.kind.value }}</strong></div>
+    <div><span class="muted">Pixiv ID</span><strong>{{ entry.work.pixiv_id }}</strong></div>
+    <div><span class="muted">Public ID</span><strong>{{ entry.work.public_id }}</strong></div>
+  </div>
+  {% if entry.work.kind.value == 'series' %}
+    <h2>Chapters</h2>
+    <ol class="chapter-list">
+      {% for chapter in entry.work.chapters %}
+        <li>{{ chapter.position }}. {{ chapter.translated_title or chapter.original_title }}</li>
+      {% endfor %}
+    </ol>
+  {% endif %}
+</section>
+{% endblock %}

@@ -6,22 +6,8 @@ from pathlib import Path
 import typer
 
 from fanfictl.config import Settings
-from fanfictl.exporters import (
-    build_combined_markdown,
-    write_epub,
-    write_html,
-    write_markdown,
-    write_text,
-)
-from fanfictl.models import Checkpoint, ExportFormat, WorkKind
-from fanfictl.pixiv import PixivClient, parse_pixiv_url
-from fanfictl.storage import (
-    ensure_work_dirs,
-    load_checkpoint,
-    save_checkpoint,
-    save_metadata,
-)
-from fanfictl.translate import GeminiStudioProvider, translate_work
+from fanfictl.models import ExportFormat
+from fanfictl.workflow import fetch_work_from_url, translate_url_to_outputs
 
 
 app = typer.Typer(help="Translate public Pixiv fanfiction into English")
@@ -29,16 +15,7 @@ app = typer.Typer(help="Translate public Pixiv fanfiction into English")
 
 @app.command()
 def info(url: str) -> None:
-    parsed = parse_pixiv_url(url)
-    client = PixivClient()
-    try:
-        work = (
-            client.fetch_novel_work(parsed.pixiv_id, parsed.url)
-            if parsed.kind == "novel"
-            else client.fetch_series_work(parsed.pixiv_id, parsed.url)
-        )
-    finally:
-        client.close()
+    work = fetch_work_from_url(url)
 
     typer.echo(
         json.dumps(
@@ -84,85 +61,16 @@ def translate(
         )
         raise typer.Exit(code=2)
 
-    provider = GeminiStudioProvider(
-        api_key=settings.gemini_api_key,
-        model_name=model or settings.gemini_model,
+    work, work_root = translate_url_to_outputs(
+        url,
+        settings,
+        output=output,
+        formats=format,
+        resume=resume,
+        chapter_limit=chapter_limit,
+        model=model,
+        progress_callback=lambda _stage, _current, _total, detail: typer.echo(detail),
     )
-
-    parsed = parse_pixiv_url(url)
-    client = PixivClient()
-    try:
-        work = (
-            client.fetch_novel_work(parsed.pixiv_id, parsed.url)
-            if parsed.kind == "novel"
-            else client.fetch_series_work(parsed.pixiv_id, parsed.url)
-        )
-    finally:
-        client.close()
-
-    if chapter_limit:
-        work.chapters = work.chapters[:chapter_limit]
-
-    output_base = (output or settings.output_dir).resolve()
-    work_root = ensure_work_dirs(output_base, work)
-    checkpoint = load_checkpoint(work_root) if resume else None
-    if checkpoint is None:
-        checkpoint = Checkpoint(
-            source_url=work.source_url,
-            kind=work.kind,
-            pixiv_id=work.pixiv_id,
-            original_title=work.original_title,
-            model_name=model or settings.gemini_model,
-        )
-
-    typer.echo(f"Translating {work.kind.value} {work.pixiv_id}: {work.original_title}")
-    work = translate_work(
-        work,
-        provider,
-        checkpoint,
-        checkpoint_callback=lambda cp: save_checkpoint(work_root, cp),
-    )
-    save_checkpoint(work_root, checkpoint)
-    save_metadata(work_root, work)
-
-    for chapter in work.chapters:
-        chapter_root = work_root / "chapters"
-        (chapter_root / f"{chapter.position:03d}-source.md").write_text(
-            chapter.source_markdown, encoding="utf-8"
-        )
-        if chapter.translated_markdown:
-            (chapter_root / f"{chapter.position:03d}-translated.md").write_text(
-                chapter.translated_markdown,
-                encoding="utf-8",
-            )
-
-    combined_markdown = build_combined_markdown(work)
-    title = work.translated_title or work.original_title
-    if ExportFormat.MD in format:
-        write_markdown(
-            work_root
-            / ("translated.md" if work.kind == WorkKind.NOVEL else "combined.md"),
-            combined_markdown,
-        )
-    if ExportFormat.TXT in format:
-        write_text(
-            work_root
-            / ("translated.txt" if work.kind == WorkKind.NOVEL else "combined.txt"),
-            combined_markdown,
-        )
-    if ExportFormat.HTML in format:
-        write_html(
-            work_root
-            / ("translated.html" if work.kind == WorkKind.NOVEL else "combined.html"),
-            combined_markdown,
-            title,
-        )
-    if ExportFormat.EPUB in format:
-        write_epub(
-            work_root
-            / ("translated.epub" if work.kind == WorkKind.NOVEL else "combined.epub"),
-            work,
-        )
 
     typer.echo(f"Done: {work_root}")
 

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="auth-shell">
+  <div class="auth-card">
+    <h1>Admin access</h1>
+    <p class="muted">Sign in to submit Pixiv URLs, manage jobs, and inspect stored works.</p>
+    {% if error %}<p class="notice notice--error">{{ error }}</p>{% endif %}
+    <form action="/login" method="post" class="stack-16">
+      <label>
+        <span>Username</span>
+        <input name="username" type="text" value="admin" autocomplete="username" required>
+      </label>
+      <label>
+        <span>Password</span>
+        <input name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button class="button" type="submit">Sign in</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }} · fanfictl</title>
+    <meta name="robots" content="noindex,nofollow,noarchive">
+    {% if refresh %}<meta http-equiv="refresh" content="3">{% endif %}
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body class="{% if public %}public{% endif %}">
+    {% if not public %}
+    <header class="topbar">
+      <div class="topbar__inner">
+        <a class="brand" href="/dashboard">fanfictl</a>
+        <nav class="nav">
+          <a href="/dashboard">Dashboard</a>
+        </nav>
+        <form action="/logout" method="post">
+          <button class="button button--ghost" type="submit">Log out</button>
+        </form>
+      </div>
+    </header>
+    {% endif %}
+    <main class="page">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

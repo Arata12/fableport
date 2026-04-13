@@ -9,17 +9,28 @@ description = "Translate public Pixiv fanfiction into English"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "bleach>=6.1.0",
   "ebooklib>=0.18",
+  "fastapi>=0.115.0",
   "google-genai>=1.30.0",
   "httpx>=0.27.0",
+  "itsdangerous>=2.2.0",
+  "jinja2>=3.1.4",
   "markdown-it-py>=3.0.0",
   "pydantic>=2.8.0",
+  "python-multipart>=0.0.9",
   "python-dotenv>=1.0.1",
   "typer>=0.12.3",
+  "uvicorn>=0.30.0",
 ]
 
 [project.scripts]
 fanfictl = "fanfictl.cli:app"
+fanfictl-web = "fanfictl.webapp:serve"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fanfictl"]
+include = [
+  "src/fanfictl/templates/**/*",
+  "src/fanfictl/static/**/*",
+]

@@ -86,8 +86,11 @@ def translate_work(
     provider: GeminiStudioProvider,
     checkpoint: Checkpoint,
     checkpoint_callback: Callable[[Checkpoint], None] | None = None,
+    progress_callback: Callable[[str, int, int, str], None] | None = None,
 ) -> Work:
     if not checkpoint.translated_title:
+        if progress_callback:
+            progress_callback("title", 0, len(work.chapters), "Translating work title")
         checkpoint.translated_title = provider.translate_title(work.original_title)
         work.translated_title = checkpoint.translated_title
         if checkpoint_callback:
@@ -100,6 +103,13 @@ def translate_work(
             str(chapter.position), CheckpointChapter()
         )
         if not state.translated_title:
+            if progress_callback:
+                progress_callback(
+                    "chapter-title",
+                    chapter.position,
+                    len(work.chapters),
+                    f"Translating chapter title {chapter.position}/{len(work.chapters)}",
+                )
             state.translated_title = provider.translate_title(chapter.original_title)
             if checkpoint_callback:
                 checkpoint_callback(checkpoint)
@@ -111,12 +121,27 @@ def translate_work(
         )
         start_index = len(state.translated_chunks)
 
-        for chunk in chunks[start_index:]:
+        if progress_callback:
+            progress_callback(
+                "chapter",
+                chapter.position,
+                len(work.chapters),
+                f"Translating chapter {chapter.position}/{len(work.chapters)}",
+            )
+
+        for idx, chunk in enumerate(chunks[start_index:], start=start_index + 1):
             translated = provider.translate_chunk(
                 chunk, previous_context=previous_context
             )
             state.translated_chunks.append(translated)
             previous_context = translated
+            if progress_callback:
+                progress_callback(
+                    "chunk",
+                    chapter.position,
+                    len(work.chapters),
+                    f"Translated chunk {idx}/{len(chunks)} in chapter {chapter.position}",
+                )
             if checkpoint_callback:
                 checkpoint_callback(checkpoint)
 

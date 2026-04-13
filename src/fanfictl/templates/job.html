@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel panel--wide">
+  <h1>Job {{ job.id }}</h1>
+  <div class="meta-grid">
+    <div><span class="muted">Status</span><strong>{{ job.status }}</strong></div>
+    <div><span class="muted">Step</span><strong>{{ job.current_step }}</strong></div>
+    <div><span class="muted">Progress</span><strong>{{ job.current_chapter }} / {{ job.total_chapters }}</strong></div>
+  </div>
+  <p>{{ job.message }}</p>
+  {% if job.error_message %}<p class="notice notice--error">{{ job.error_message }}</p>{% endif %}
+  {% if work_entry %}
+    <div class="actions-row">
+      <a class="button" href="/works/{{ work_entry.root_name }}">Open work</a>
+      <a class="button button--ghost" href="{{ work_entry.public_url_path }}">Open reader</a>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

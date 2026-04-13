@@ -25,6 +25,7 @@ class Work(BaseModel):
     kind: WorkKind
     pixiv_id: int
     source_url: str
+    public_id: str | None = None
     original_title: str
     translated_title: str | None = None
     author_name: str
