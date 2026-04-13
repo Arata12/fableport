@@ -13,6 +13,7 @@ The project has one shared Python core used by both:
 
 - parses Pixiv novel and series URLs
 - calls public Pixiv AJAX endpoints
+- retries with authenticated Pixiv App API when public fetch is not enough
 - normalizes payloads into internal work/chapter models
 
 ### `content.py`
@@ -55,6 +56,12 @@ The project has one shared Python core used by both:
 
 - resolves personal keys, global fallback keys, and the system `.env` key
 - stores non-env keys in runtime app data
+- exposes masked summaries for the dashboard
+
+### `pixiv_tokens.py`
+
+- resolves personal Pixiv refresh tokens, global Pixiv refresh tokens, and the system `.env` token
+- stores non-env Pixiv tokens in runtime app data
 - exposes masked summaries for the dashboard
 
 ### `webapp.py`

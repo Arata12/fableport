@@ -4,6 +4,7 @@ Docker-first Pixiv fanfic translator and reader.
 
 It can:
 - fetch public Pixiv novels and series
+- retry login-required Pixiv works with optional authenticated Pixiv access
 - translate them to English with Google AI Studio using `gemma-4-31b-it`
 - store canonical Markdown plus exports
 - serve a small web UI with admin submission and public reader links
@@ -81,8 +82,8 @@ docker compose down
 ### Run CLI commands through Docker
 
 ```bash
-docker compose --profile tools run --rm cli fableport info "https://www.pixiv.net/novel/show.php?id=27402134"
-docker compose --profile tools run --rm cli fableport translate "https://www.pixiv.net/novel/show.php?id=27402134"
+docker compose --profile tools run --rm cli info "https://www.pixiv.net/novel/show.php?id=27402134"
+docker compose --profile tools run --rm cli translate "https://www.pixiv.net/novel/show.php?id=27402134"
 ```
 
 ### Run tests through Docker
@@ -101,6 +102,7 @@ Important ones:
 - `GEMINI_MODEL`: default model, currently `gemma-4-31b-it`
 - `GEMINI_RPM_LIMIT`: per-key requests per minute, default `15`
 - `GEMINI_RPD_LIMIT`: per-key requests per day, default `1500`
+- `PIXIV_REFRESH_TOKEN`: optional system Pixiv refresh token used as the last authenticated fallback
 - `APP_DOMAIN`: domain used by Caddy labels in `compose.yaml`
 - `APP_BASE_URL`: absolute base URL used in the app
 - `APP_SECRET_KEY`: session signing key
@@ -116,6 +118,37 @@ Important ones:
 - Quota is tracked per key.
 - Key resolution order is: personal keys -> global fallback keys -> system key.
 
+## Pixiv token behavior
+
+- Public Pixiv fetch is always tried first.
+- If a Pixiv work requires login, Fableport retries with Pixiv refresh tokens.
+- Resolution order is: personal Pixiv token -> global Pixiv token -> system `.env` Pixiv token.
+- Admins can add global Pixiv refresh tokens in `Settings`.
+- Users can add personal Pixiv refresh tokens in `Settings`.
+
+## How to get a Pixiv refresh token
+
+Recommended method:
+
+1. use the community OAuth helper referenced by PixivPy3, such as ZipFile's `pixiv_auth.py`
+2. run:
+
+```bash
+python pixiv_auth.py login
+```
+
+3. a browser window will open to Pixiv login
+4. sign in normally
+5. after the callback step, copy the returned `refresh_token`
+6. paste that token into Fableport Settings, or store it as `PIXIV_REFRESH_TOKEN` in `.env`
+
+Notes:
+
+- the refresh token is what Fableport needs
+- do **not** paste your Pixiv password into the app
+- treat the refresh token like a secret
+- the system `.env` token is used as the final authenticated fallback
+
 ## License
 
 This project is licensed under **AGPL-3.0-or-later**. See [LICENSE](LICENSE).
@@ -123,5 +156,5 @@ This project is licensed under **AGPL-3.0-or-later**. See [LICENSE](LICENSE).
 ## Notes
 
 - Tracked files do **not** contain your real domain or secrets.
-- Public Pixiv links only for now.
-- Restricted/private Pixiv content is still out of scope.
+- Public Pixiv fetch is the default path.
+- Login-required Pixiv works can be retried with configured Pixiv refresh tokens.

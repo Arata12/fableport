@@ -90,6 +90,19 @@ Behavior:
 - extra keys are masked in the UI
 - translation automatically falls back when another key is exhausted
 
+## Pixiv tokens
+
+The dashboard also supports Pixiv refresh tokens.
+
+Behavior:
+
+- public Pixiv fetch is tried first
+- if the work requires login, Fableport retries with Pixiv auth
+- users can add personal Pixiv refresh tokens in `Settings`
+- admins can add global Pixiv refresh tokens in `Settings`
+- `.env` can hold a system `PIXIV_REFRESH_TOKEN`
+- fallback order is: personal token -> global token -> system token
+
 ## Limits
 
 Current defaults:

@@ -25,6 +25,7 @@ The app stores all runtime data there:
 - job records
 - quota state
 - personal and global fallback API keys
+- personal and global Pixiv refresh tokens
 - user database
 
 ## Required `.env`
@@ -34,6 +35,7 @@ GEMINI_API_KEY=...
 GEMINI_MODEL=gemma-4-31b-it
 GEMINI_RPM_LIMIT=15
 GEMINI_RPD_LIMIT=1500
+PIXIV_REFRESH_TOKEN=
 
 APP_DOMAIN=example.com
 APP_BASE_URL=https://example.com
