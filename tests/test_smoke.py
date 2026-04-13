@@ -3,7 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from fanfictl.config import Settings
 from fanfictl.content import normalize_pixiv_text_to_markdown
 from fanfictl.exporters import (
     build_combined_markdown,
@@ -13,9 +15,11 @@ from fanfictl.exporters import (
     write_text,
 )
 from fanfictl.models import Chapter, Checkpoint, Work, WorkKind
-from fanfictl.pixiv import parse_pixiv_url
+from fanfictl.pixiv import PixivAccessError, parse_pixiv_url
+from fanfictl.pixiv_tokens import PixivTokenStore
 from fanfictl.storage import ensure_work_dirs, load_checkpoint, save_checkpoint
 from fanfictl.translate import split_markdown_into_chunks, translate_work
+from fanfictl.workflow import fetch_work_from_url
 
 
 class FakeProvider:
@@ -102,6 +106,45 @@ class SmokeTests(unittest.TestCase):
     def test_chunking(self) -> None:
         chunks = split_markdown_into_chunks("para1\n\npara2\n\npara3", max_chars=8)
         self.assertEqual(len(chunks), 3)
+
+    def test_fetch_falls_back_to_authenticated_pixiv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings()
+            settings.output_dir = Path(tmp) / "output"
+            settings.pixiv_refresh_token = "system-token"
+            token_store = PixivTokenStore(settings)
+            work = Work(
+                kind=WorkKind.NOVEL,
+                pixiv_id=321,
+                source_url="https://www.pixiv.net/novel/show.php?id=321",
+                original_title="Title",
+                author_name="Author",
+                chapters=[
+                    Chapter(
+                        position=1,
+                        pixiv_novel_id=321,
+                        original_title="Title",
+                        source_markdown="# Title\n\nBody",
+                    )
+                ],
+            )
+
+            with (
+                patch(
+                    "fanfictl.workflow.PixivClient.fetch_novel_work",
+                    side_effect=PixivAccessError("login required"),
+                ),
+                patch(
+                    "fanfictl.workflow.AuthenticatedPixivClient.fetch_novel_work",
+                    return_value=work,
+                ),
+            ):
+                fetched = fetch_work_from_url(
+                    "https://www.pixiv.net/novel/show.php?id=321",
+                    pixiv_token_store=token_store,
+                )
+
+            self.assertEqual(fetched.pixiv_id, 321)
 
 
 if __name__ == "__main__":

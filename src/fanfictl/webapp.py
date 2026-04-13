@@ -23,6 +23,7 @@ from fanfictl.library import (
 )
 from fanfictl.models import ExportFormat
 from fanfictl.quota import QuotaTracker
+from fanfictl.pixiv_tokens import PixivTokenStore
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -47,6 +48,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.user_store = UserStore(settings)
     app.state.key_store = APIKeyStore(settings, app.state.user_store)
+    app.state.pixiv_token_store = PixivTokenStore(settings, app.state.user_store)
     app.state.jobs = JobManager(
         settings,
         user_store=app.state.user_store,
@@ -90,6 +92,10 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "quota": quota,
                 "personal_keys": app.state.key_store.list_personal_keys(user),
                 "global_keys": app.state.key_store.list_global_keys(),
+                "personal_pixiv_tokens": app.state.pixiv_token_store.list_personal_tokens(
+                    user
+                ),
+                "global_pixiv_tokens": app.state.pixiv_token_store.list_global_tokens(),
                 "users": app.state.user_store.list_users()
                 if user.role == "admin"
                 else [],
@@ -259,6 +265,54 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         if redirect:
             return redirect
         app.state.key_store.remove_global_key(key_id)
+        return RedirectResponse("/dashboard/settings", status_code=303)
+
+    @app.post("/pixiv/personal")
+    def add_personal_pixiv_token(request: Request, refresh_token: str = Form(...)):
+        redirect = require_login(request)
+        if redirect:
+            return redirect
+        user = current_user(request)
+        if not user:
+            return RedirectResponse("/login", status_code=303)
+        try:
+            app.state.pixiv_token_store.add_user_token(user, refresh_token)
+        except ValueError as exc:
+            return render_dashboard(
+                request, error=str(exc), status_code=400, active_tab="settings"
+            )
+        return RedirectResponse("/dashboard/settings", status_code=303)
+
+    @app.post("/pixiv/personal/{token_id}/delete")
+    def delete_personal_pixiv_token(request: Request, token_id: str):
+        redirect = require_login(request)
+        if redirect:
+            return redirect
+        user = current_user(request)
+        if not user:
+            return RedirectResponse("/login", status_code=303)
+        app.state.pixiv_token_store.remove_user_token(user, token_id)
+        return RedirectResponse("/dashboard/settings", status_code=303)
+
+    @app.post("/pixiv/global")
+    def add_global_pixiv_token(request: Request, refresh_token: str = Form(...)):
+        redirect = require_admin(request)
+        if redirect:
+            return redirect
+        try:
+            app.state.pixiv_token_store.add_global_token(refresh_token)
+        except ValueError as exc:
+            return render_dashboard(
+                request, error=str(exc), status_code=400, active_tab="settings"
+            )
+        return RedirectResponse("/dashboard/settings", status_code=303)
+
+    @app.post("/pixiv/global/{token_id}/delete")
+    def delete_global_pixiv_token(request: Request, token_id: str):
+        redirect = require_admin(request)
+        if redirect:
+            return redirect
+        app.state.pixiv_token_store.remove_global_token(token_id)
         return RedirectResponse("/dashboard/settings", status_code=303)
 
     @app.post("/users")

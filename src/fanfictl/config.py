@@ -14,6 +14,7 @@ class Settings:
     def __init__(self) -> None:
         self.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
         self.gemini_model = os.getenv("GEMINI_MODEL", "gemma-4-31b-it")
+        self.pixiv_refresh_token = os.getenv("PIXIV_REFRESH_TOKEN", "")
         self.output_dir = Path(os.getenv("FANFICTL_OUTPUT_DIR", "./output")).resolve()
         self.app_base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
         self.app_secret_key = os.getenv("APP_SECRET_KEY", "change-me-secret")

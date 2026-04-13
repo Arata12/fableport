@@ -94,6 +94,19 @@ class UserStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pixiv_tokens (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  owner_user_id INTEGER NULL,
+                  scope TEXT NOT NULL CHECK(scope IN ('global', 'user')),
+                  refresh_token TEXT NOT NULL,
+                  refresh_token_hash TEXT,
+                  created_at TEXT NOT NULL,
+                  FOREIGN KEY(owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+                """
+            )
             conn.commit()
 
     def bootstrap_admin(self) -> None:

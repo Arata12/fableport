@@ -10,6 +10,7 @@ from fanfictl.auth import UserStore
 from fanfictl.config import Settings
 from fanfictl.keystore import APIKeyStore
 from fanfictl.models import Chapter, Work, WorkKind
+from fanfictl.pixiv_tokens import PixivTokenStore
 from fanfictl.quota import QuotaTracker
 from fanfictl.storage import ensure_work_dirs, save_metadata
 from fanfictl.webapp import build_app
@@ -143,6 +144,37 @@ class WebTests(unittest.TestCase):
             self.assertIsNotNone(user)
             self.assertEqual(
                 len(APIKeyStore(settings, user_store).runtime_keys_for_user(user)), 2
+            )
+
+    def test_can_add_personal_pixiv_token_from_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "output"
+            settings = Settings()
+            settings.output_dir = output_dir
+            settings.app_base_url = "http://localhost:8000"
+            settings.app_secret_key = "test-secret"
+            settings.admin_username = "admin"
+            settings.admin_password = "admin"
+
+            app = build_app(settings)
+            client = TestClient(app)
+            client.post("/login", data={"username": "admin", "password": "admin"})
+            response = client.post(
+                "/pixiv/personal",
+                data={"refresh_token": "pixiv-refresh-token-demo"},
+                follow_redirects=True,
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("Personal Pixiv token", response.text)
+            user_store = UserStore(settings)
+            user = user_store.authenticate("admin", "admin")
+            self.assertIsNotNone(user)
+            self.assertEqual(
+                len(
+                    PixivTokenStore(settings, user_store).runtime_tokens_for_user(user)
+                ),
+                1,
             )
 
     def test_user_can_change_password_in_settings(self) -> None:

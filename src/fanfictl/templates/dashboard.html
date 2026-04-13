@@ -199,6 +199,36 @@
     </form>
   </section>
 
+  <section class="panel">
+    <h2>Personal Pixiv token</h2>
+    <p class="muted">Used first for your own imports when a Pixiv work requires login.</p>
+    {% if personal_pixiv_tokens %}
+      <ul class="key-list">
+        {% for token in personal_pixiv_tokens %}
+          <li>
+            <div>
+              <strong>{{ token.masked }}</strong>
+              <div class="muted small">personal refresh token</div>
+            </div>
+            <form action="/pixiv/personal/{{ token.id }}/delete" method="post">
+              <button class="button button--ghost" type="submit">Remove</button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No personal Pixiv token configured.</p>
+    {% endif %}
+    <h3 class="subhead">Add personal Pixiv refresh token</h3>
+    <form action="/pixiv/personal" method="post" class="stack-16">
+      <label>
+        <span>Pixiv refresh token</span>
+        <input name="refresh_token" type="password" placeholder="paste your Pixiv refresh token" required>
+      </label>
+      <button class="button" type="submit">Add personal token</button>
+    </form>
+  </section>
+
   {% if current_user.role == 'admin' %}
   <section class="panel panel--wide">
     <div class="section-head">
@@ -231,6 +261,40 @@
         <input name="api_key" type="password" placeholder="AIza..." required>
       </label>
       <button class="button" type="submit">Add global key</button>
+    </form>
+  </section>
+
+  <section class="panel panel--wide">
+    <div class="section-head">
+      <h2>Global Pixiv token</h2>
+      <p class="muted">Default authenticated fallback for login-required Pixiv works.</p>
+    </div>
+    {% if global_pixiv_tokens %}
+      <ul class="key-list">
+        {% for token in global_pixiv_tokens %}
+          <li>
+            <div>
+              <strong>{{ token.masked }}</strong>
+              <div class="muted small">{{ token.source }}{% if token.is_default %} · system default{% endif %}</div>
+            </div>
+            {% if token.source == 'global' %}
+              <form action="/pixiv/global/{{ token.id }}/delete" method="post">
+                <button class="button button--ghost" type="submit">Remove</button>
+              </form>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No global Pixiv token configured.</p>
+    {% endif %}
+    <h3 class="subhead">Add global Pixiv refresh token</h3>
+    <form action="/pixiv/global" method="post" class="stack-16">
+      <label>
+        <span>Shared Pixiv refresh token</span>
+        <input name="refresh_token" type="password" placeholder="paste a shared Pixiv refresh token" required>
+      </label>
+      <button class="button" type="submit">Add global token</button>
     </form>
   </section>
 

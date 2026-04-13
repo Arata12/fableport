@@ -22,6 +22,7 @@ dependencies = [
   "jinja2>=3.1.4",
   "markdown-it-py>=3.0.0",
   "pydantic>=2.8.0",
+  "pixivpy3>=3.7.5",
   "python-multipart>=0.0.9",
   "python-dotenv>=1.0.1",
   "typer>=0.12.3",

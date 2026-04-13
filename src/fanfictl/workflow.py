@@ -15,7 +15,13 @@ from fanfictl.exporters import (
 )
 from fanfictl.keystore import APIKeyStore
 from fanfictl.models import Checkpoint, ExportFormat, Work, WorkKind
-from fanfictl.pixiv import PixivClient, parse_pixiv_url
+from fanfictl.pixiv import (
+    AuthenticatedPixivClient,
+    PixivAccessError,
+    PixivClient,
+    parse_pixiv_url,
+)
+from fanfictl.pixiv_tokens import PixivTokenStore
 from fanfictl.quota import QuotaTracker
 from fanfictl.storage import (
     ensure_work_dirs,
@@ -29,7 +35,13 @@ from fanfictl.translate import GeminiStudioProvider, translate_work
 ProgressCallback = Callable[[str, int, int, str], None]
 
 
-def fetch_work_from_url(url: str, chapter_limit: int | None = None) -> Work:
+def fetch_work_from_url(
+    url: str,
+    *,
+    chapter_limit: int | None = None,
+    owner_user: UserRecord | None = None,
+    pixiv_token_store: PixivTokenStore | None = None,
+) -> Work:
     parsed = parse_pixiv_url(url)
     client = PixivClient()
     try:
@@ -37,6 +49,19 @@ def fetch_work_from_url(url: str, chapter_limit: int | None = None) -> Work:
             client.fetch_novel_work(parsed.pixiv_id, parsed.url)
             if parsed.kind == "novel"
             else client.fetch_series_work(parsed.pixiv_id, parsed.url)
+        )
+    except PixivAccessError as public_error:
+        token_store = pixiv_token_store
+        tokens = token_store.runtime_tokens_for_user(owner_user) if token_store else []
+        if not tokens:
+            raise RuntimeError(
+                "This Pixiv work requires login to import. Add a Pixiv refresh token in Settings."
+            ) from public_error
+        auth_client = AuthenticatedPixivClient(tokens)
+        work = (
+            auth_client.fetch_novel_work(parsed.pixiv_id, parsed.url)
+            if parsed.kind == "novel"
+            else auth_client.fetch_series_work(parsed.pixiv_id, parsed.url)
         )
     finally:
         client.close()
@@ -68,6 +93,7 @@ def translate_url_to_outputs(
     if target.lower() != "en":
         raise ValueError("v1 only supports English output")
     key_store = key_store or APIKeyStore(settings)
+    pixiv_token_store = PixivTokenStore(settings)
     runtime_keys = key_store.runtime_keys_for_user(owner_user)
     if not runtime_keys:
         raise RuntimeError(
@@ -77,7 +103,12 @@ def translate_url_to_outputs(
     if progress_callback:
         progress_callback("fetching", 0, 0, "Fetching Pixiv work")
 
-    work = fetch_work_from_url(url, chapter_limit=chapter_limit)
+    work = fetch_work_from_url(
+        url,
+        chapter_limit=chapter_limit,
+        owner_user=owner_user,
+        pixiv_token_store=pixiv_token_store,
+    )
     work.owner_user_id = owner_user.id if owner_user else None
     work.owner_username = owner_user.username if owner_user else None
     output_base = (output or settings.output_dir).resolve()
