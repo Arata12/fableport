@@ -2,13 +2,13 @@
 {% block content %}
 <section class="auth-shell">
   <div class="auth-card">
-    <h1>Admin access</h1>
-    <p class="muted">Sign in to submit Pixiv URLs, manage jobs, and inspect stored works.</p>
+    <h1>Sign in</h1>
+    <p class="muted">Access Fableport to import Pixiv works, manage jobs, and inspect stored translations.</p>
     {% if error %}<p class="notice notice--error">{{ error }}</p>{% endif %}
     <form action="/login" method="post" class="stack-16">
       <label>
         <span>Username</span>
-        <input name="username" type="text" value="admin" autocomplete="username" required>
+        <input name="username" type="text" autocomplete="username" required>
       </label>
       <label>
         <span>Password</span>

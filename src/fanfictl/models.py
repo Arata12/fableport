@@ -26,10 +26,13 @@ class Work(BaseModel):
     pixiv_id: int
     source_url: str
     public_id: str | None = None
+    owner_user_id: int | None = None
+    owner_username: str | None = None
     original_title: str
     translated_title: str | None = None
     author_name: str
     description: str = ""
+    translated_description: str | None = None
     original_language: str | None = None
     chapters: list[Chapter] = Field(default_factory=list)
 
@@ -45,6 +48,7 @@ class Checkpoint(BaseModel):
     pixiv_id: int
     original_title: str
     translated_title: str | None = None
+    translated_description: str | None = None
     target_language: str = "English"
     model_name: str
     chapter_states: dict[str, CheckpointChapter] = Field(default_factory=dict)

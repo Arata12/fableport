@@ -3,19 +3,34 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ title }} · fanfictl</title>
+    <title>{{ title }} · Fableport</title>
     <meta name="robots" content="noindex,nofollow,noarchive">
     {% if refresh %}<meta http-equiv="refresh" content="3">{% endif %}
     <link rel="stylesheet" href="/static/app.css">
   </head>
   <body class="{% if public %}public{% endif %}">
+    {% if public and current_user %}
+    <header class="utilitybar">
+      <div class="utilitybar__inner">
+        <a class="brand" href="/dashboard">Back to dashboard</a>
+        {% if can_manage and entry %}
+          <a href="/works/{{ entry.root_name }}">Manage work</a>
+        {% endif %}
+      </div>
+    </header>
+    {% endif %}
     {% if not public %}
     <header class="topbar">
       <div class="topbar__inner">
-        <a class="brand" href="/dashboard">fanfictl</a>
+        <a class="brand" href="/dashboard">Fableport</a>
         <nav class="nav">
-          <a href="/dashboard">Dashboard</a>
+          <a class="{% if active_tab == 'overview' %}is-active{% endif %}" href="/dashboard">Overview</a>
+          <a class="{% if active_tab == 'library' %}is-active{% endif %}" href="/dashboard/library">Library</a>
+          <a class="{% if active_tab == 'settings' %}is-active{% endif %}" href="/dashboard/settings">Settings</a>
         </nav>
+        {% if current_user %}
+          <span class="muted small">{{ current_user.username }} · {{ current_user.role }}</span>
+        {% endif %}
         <form action="/logout" method="post">
           <button class="button button--ghost" type="submit">Log out</button>
         </form>

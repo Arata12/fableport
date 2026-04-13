@@ -3,6 +3,9 @@
 <section class="panel panel--wide">
   <h1>{{ entry.work.translated_title or entry.work.original_title }}</h1>
   <p class="muted">{{ entry.work.original_title }} · {{ entry.work.author_name }}</p>
+  {% if entry.work.translated_description or entry.work.description %}
+    <p>{{ entry.work.translated_description or entry.work.description }}</p>
+  {% endif %}
   <div class="actions-row">
     <a class="button" href="{{ entry.public_url_path }}">Open public reader</a>
     {% for fmt, filename in entry.outputs.items() %}

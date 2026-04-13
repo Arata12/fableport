@@ -53,24 +53,22 @@ def translate(
         raise typer.BadParameter("v1 only supports English output")
 
     settings = Settings()
-    if not settings.gemini_api_key:
-        typer.secho(
-            "GEMINI_API_KEY is required for translation. Put it in .env or your shell environment.",
-            fg=typer.colors.RED,
-            err=True,
+    try:
+        work, work_root = translate_url_to_outputs(
+            url,
+            settings,
+            output=output,
+            formats=format,
+            resume=resume,
+            chapter_limit=chapter_limit,
+            model=model,
+            progress_callback=lambda _stage, _current, _total, detail: typer.echo(
+                detail
+            ),
         )
-        raise typer.Exit(code=2)
-
-    work, work_root = translate_url_to_outputs(
-        url,
-        settings,
-        output=output,
-        formats=format,
-        resume=resume,
-        chapter_limit=chapter_limit,
-        model=model,
-        progress_callback=lambda _stage, _current, _total, detail: typer.echo(detail),
-    )
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
 
     typer.echo(f"Done: {work_root}")
 

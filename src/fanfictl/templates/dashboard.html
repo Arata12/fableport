@@ -1,13 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="layout">
+  {% if form_error %}
+    <section class="panel panel--wide">
+      <p class="notice notice--error">{{ form_error }}</p>
+    </section>
+  {% endif %}
+
+  {% if active_tab == 'overview' %}
   <section class="panel panel--wide">
     <h1>New import</h1>
-    <p class="muted">Paste a public Pixiv novel or series URL. The app translates it into English and stores the Markdown and exports.</p>
-    {% if form_error %}
-      <p class="notice notice--error">{{ form_error }}</p>
-    {% endif %}
-    {% if using_default_admin %}
+    <p class="muted">Paste a public Pixiv novel or series URL. The work is translated into English, stored in your library, and exposed through a public reader link.</p>
+    {% if using_default_admin and current_user.role == 'admin' %}
       <p class="notice">You are using the default admin credentials. Change <code>ADMIN_USERNAME</code> and <code>ADMIN_PASSWORD</code> in your env later.</p>
     {% endif %}
     <form action="/submit" method="post" class="stack-20">
@@ -34,7 +38,7 @@
           <label class="checkbox-row"><input name="export_epub" type="checkbox" value="1" checked><span>EPUB</span></label>
         </div>
       </fieldset>
-      <button class="button" type="submit">Start translation</button>
+      <button class="button" type="submit">Queue translation</button>
     </form>
   </section>
 
@@ -57,31 +61,6 @@
     {% if quota.last_error %}
       <p class="notice">Last quota event: {{ quota.last_error }}</p>
     {% endif %}
-    {% if keys %}
-      <ul class="key-list">
-        {% for key in keys %}
-          <li>
-            <div>
-              <strong>{{ key.masked }}</strong>
-              <div class="muted small">{{ key.source }}{% if key.is_default %} · default{% endif %}</div>
-            </div>
-            {% if not key.is_default %}
-              <form action="/keys/{{ key.id }}/delete" method="post">
-                <button class="button button--ghost" type="submit">Remove</button>
-              </form>
-            {% endif %}
-          </li>
-        {% endfor %}
-      </ul>
-    {% endif %}
-    <h3 class="subhead">Fallback keys</h3>
-    <form action="/keys" method="post" class="stack-16">
-      <label>
-        <span>Additional Gemini API key</span>
-        <input name="api_key" type="password" placeholder="AIza..." required>
-      </label>
-      <button class="button" type="submit">Add fallback key</button>
-    </form>
   </section>
 
   <section class="panel">
@@ -100,38 +79,202 @@
       <p class="muted">No jobs yet.</p>
     {% endif %}
   </section>
-
+  {% elif active_tab == 'library' %}
   <section class="panel panel--wide">
     <div class="section-head">
-      <h2>Library</h2>
-      <p class="muted">Reader links use {{ base_url }}.</p>
+      <h1>My imports</h1>
+      <p class="muted">Works you imported or own.</p>
     </div>
-    {% if works %}
+    {% if my_works %}
       <table class="table">
         <thead>
-          <tr><th>Title</th><th>Author</th><th>Type</th><th>Files</th><th></th></tr>
+          <tr><th>Title</th><th>Author</th><th>Type</th><th>Files</th><th>Actions</th></tr>
         </thead>
         <tbody>
-          {% for entry in works %}
+          {% for entry in my_works %}
             <tr>
               <td>
-                <strong>{{ entry.work.translated_title or entry.work.original_title }}</strong>
+                <a class="table-link" href="{{ entry.public_url_path }}"><strong>{{ entry.work.translated_title or entry.work.original_title }}</strong></a>
                 <div class="muted small">{{ entry.work.original_title }}</div>
               </td>
               <td>{{ entry.work.author_name }}</td>
               <td>{{ entry.work.kind.value }}</td>
               <td class="small">{{ entry.outputs.keys()|join(', ') }}</td>
               <td class="actions-cell">
-                <a href="/works/{{ entry.root_name }}">Manage</a>
-                <a href="{{ entry.public_url_path }}">Read</a>
+                <a class="button button--ghost button--small" href="{{ entry.public_url_path }}">Reader</a>
+                <a class="button button--ghost button--small" href="/works/{{ entry.root_name }}">Admin</a>
               </td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
     {% else %}
-      <p class="muted">No imported works yet.</p>
+      <p class="muted">You have not imported anything yet.</p>
     {% endif %}
   </section>
+
+  <section class="panel panel--wide">
+    <div class="section-head">
+      <h2>Public library</h2>
+      <p class="muted">Reader links use {{ base_url }}.</p>
+    </div>
+    {% if public_works %}
+      <table class="table">
+        <thead>
+          <tr><th>Title</th><th>Author</th><th>Type</th><th>Owner</th><th>Files</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+          {% for entry in public_works %}
+            <tr>
+              <td>
+                <a class="table-link" href="{{ entry.public_url_path }}"><strong>{{ entry.work.translated_title or entry.work.original_title }}</strong></a>
+                <div class="muted small">{{ entry.work.original_title }}</div>
+              </td>
+              <td>{{ entry.work.author_name }}</td>
+              <td>{{ entry.work.kind.value }}</td>
+              <td>{{ entry.work.owner_username or 'system' }}</td>
+              <td class="small">{{ entry.outputs.keys()|join(', ') }}</td>
+              <td class="actions-cell">
+                <a class="button button--ghost button--small" href="{{ entry.public_url_path }}">Reader</a>
+                {% if current_user.role == 'admin' %}
+                  <a class="button button--ghost button--small" href="/works/{{ entry.root_name }}">Admin</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">No public works yet.</p>
+    {% endif %}
+  </section>
+  {% elif active_tab == 'settings' %}
+  <section class="panel">
+    <h1>Account</h1>
+    <p class="muted">Signed in as {{ current_user.username }}.</p>
+    <h2 class="subhead">Change password</h2>
+    <form action="/account/password" method="post" class="stack-16">
+      <label>
+        <span>Current password</span>
+        <input name="current_password" type="password" required>
+      </label>
+      <label>
+        <span>New password</span>
+        <input name="new_password" type="password" required>
+      </label>
+      <label>
+        <span>Confirm new password</span>
+        <input name="confirm_password" type="password" required>
+      </label>
+      <button class="button" type="submit">Update password</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>Personal API keys</h2>
+    {% if personal_keys %}
+      <ul class="key-list">
+        {% for key in personal_keys %}
+          <li>
+            <div>
+              <strong>{{ key.masked }}</strong>
+              <div class="muted small">personal</div>
+            </div>
+            <form action="/keys/personal/{{ key.id }}/delete" method="post">
+              <button class="button button--ghost" type="submit">Remove</button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No personal keys yet.</p>
+    {% endif %}
+    <h3 class="subhead">Add personal key</h3>
+    <form action="/keys/personal" method="post" class="stack-16">
+      <label>
+        <span>Gemini API key</span>
+        <input name="api_key" type="password" placeholder="AIza..." required>
+      </label>
+      <button class="button" type="submit">Add personal key</button>
+    </form>
+  </section>
+
+  {% if current_user.role == 'admin' %}
+  <section class="panel panel--wide">
+    <div class="section-head">
+      <h2>Global fallback keys</h2>
+      <p class="muted">Shared keys used only after personal keys are exhausted.</p>
+    </div>
+    {% if global_keys %}
+      <ul class="key-list">
+        {% for key in global_keys %}
+          <li>
+            <div>
+              <strong>{{ key.masked }}</strong>
+              <div class="muted small">{{ key.source }}{% if key.is_default %} · system default{% endif %}</div>
+            </div>
+            {% if key.source == 'global' %}
+              <form action="/keys/global/{{ key.id }}/delete" method="post">
+                <button class="button button--ghost" type="submit">Remove</button>
+              </form>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No global fallback keys configured.</p>
+    {% endif %}
+    <h3 class="subhead">Add global fallback key</h3>
+    <form action="/keys/global" method="post" class="stack-16">
+      <label>
+        <span>Shared Gemini API key</span>
+        <input name="api_key" type="password" placeholder="AIza..." required>
+      </label>
+      <button class="button" type="submit">Add global key</button>
+    </form>
+  </section>
+
+  <section class="panel panel--wide">
+    <div class="section-head">
+      <h2>Users</h2>
+      <p class="muted">Create users who can sign in and manage their own Gemini keys.</p>
+    </div>
+    <form action="/users" method="post" class="stack-20">
+      <div class="grid grid--3">
+        <label>
+          <span>Username</span>
+          <input name="username" type="text" required>
+        </label>
+        <label>
+          <span>Password</span>
+          <input name="password" type="password" required>
+        </label>
+        <label>
+          <span>Role</span>
+          <select name="role">
+            <option value="user">user</option>
+            <option value="admin">admin</option>
+          </select>
+        </label>
+      </div>
+      <button class="button" type="submit">Create user</button>
+    </form>
+    <table class="table table--spaced">
+      <thead>
+        <tr><th>Username</th><th>Role</th><th>Created</th></tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+          <tr>
+            <td>{{ user.username }}</td>
+            <td>{{ user.role }}</td>
+            <td class="small">{{ user.created_at }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+  {% endif %}
 </div>
 {% endblock %}

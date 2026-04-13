@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Callable, Iterable
 
+from fanfictl.auth import UserRecord
 from fanfictl.config import Settings
 from fanfictl.exporters import (
     build_combined_markdown,
@@ -60,11 +62,13 @@ def translate_url_to_outputs(
     chapter_limit: int | None = None,
     model: str | None = None,
     progress_callback: ProgressCallback | None = None,
+    owner_user: UserRecord | None = None,
+    key_store: APIKeyStore | None = None,
 ) -> tuple[Work, Path]:
     if target.lower() != "en":
         raise ValueError("v1 only supports English output")
-    key_store = APIKeyStore(settings)
-    runtime_keys = key_store.runtime_keys()
+    key_store = key_store or APIKeyStore(settings)
+    runtime_keys = key_store.runtime_keys_for_user(owner_user)
     if not runtime_keys:
         raise RuntimeError(
             "At least one Gemini API key is required. Put one in .env or add fallback keys in the web dashboard."
@@ -74,8 +78,19 @@ def translate_url_to_outputs(
         progress_callback("fetching", 0, 0, "Fetching Pixiv work")
 
     work = fetch_work_from_url(url, chapter_limit=chapter_limit)
+    work.owner_user_id = owner_user.id if owner_user else None
+    work.owner_username = owner_user.username if owner_user else None
     output_base = (output or settings.output_dir).resolve()
     work_root = ensure_work_dirs(output_base, work)
+    existing_work = _load_existing_work(work_root)
+    if existing_work:
+        work.public_id = existing_work.public_id
+        work.owner_user_id = existing_work.owner_user_id
+        work.owner_username = existing_work.owner_username
+        if existing_work.translated_title and not resume:
+            work.translated_title = existing_work.translated_title
+        if existing_work.translated_description and not resume:
+            work.translated_description = existing_work.translated_description
     checkpoint = load_checkpoint(work_root) if resume else None
     if checkpoint is None:
         checkpoint = Checkpoint(
@@ -157,3 +172,10 @@ def translate_url_to_outputs(
 
     save_metadata(work_root, work)
     return work, work_root
+
+
+def _load_existing_work(work_root: Path) -> Work | None:
+    metadata_path = work_root / "metadata.json"
+    if not metadata_path.exists():
+        return None
+    return Work.model_validate(json.loads(metadata_path.read_text(encoding="utf-8")))

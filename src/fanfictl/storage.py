@@ -17,6 +17,8 @@ def slugify(value: str) -> str:
 
 def work_output_dir(base_dir: Path, work: Work) -> Path:
     prefix = "novel" if work.kind == WorkKind.NOVEL else "series"
+    if work.owner_user_id is not None:
+        return base_dir / f"{prefix}-{work.pixiv_id}-u{work.owner_user_id}"
     return base_dir / f"{prefix}-{work.pixiv_id}"
 
 

@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
+import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, Field
-
+from fanfictl.auth import UserRecord, UserStore
 from fanfictl.config import Settings
-from fanfictl.storage import atomic_write_text
 
 
 def key_id_for(value: str) -> str:
@@ -21,19 +19,14 @@ def mask_key(value: str) -> str:
     return f"{value[:6]}…{value[-4:]}"
 
 
-class StoredAPIKey(BaseModel):
-    key: str
-    added_at: str = Field(
-        default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds")
-    )
-
-
 @dataclass
 class RuntimeAPIKey:
     id: str
     key: str
     source: str
     is_default: bool
+    owner_user_id: int | None = None
+    owner_username: str | None = None
 
 
 @dataclass
@@ -42,90 +35,190 @@ class APIKeySummary:
     source: str
     masked: str
     is_default: bool
-    added_at: str | None
+    owner_user_id: int | None
+    owner_username: str | None
+    created_at: str | None
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 class APIKeyStore:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, user_store: UserStore | None = None) -> None:
         self.settings = settings
-        self.path = settings.output_dir / ".api_keys.json"
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.user_store = user_store or UserStore(settings)
 
-    def runtime_keys(self) -> list[RuntimeAPIKey]:
+    def runtime_keys_for_user(self, user: UserRecord | None) -> list[RuntimeAPIKey]:
         keys: list[RuntimeAPIKey] = []
         seen: set[str] = set()
 
-        if self.settings.gemini_api_key:
-            key_id = key_id_for(self.settings.gemini_api_key)
-            keys.append(
-                RuntimeAPIKey(
-                    id=key_id,
-                    key=self.settings.gemini_api_key,
-                    source="env",
-                    is_default=True,
+        if user:
+            for row in self._fetch_rows(owner_user_id=user.id, scope="user"):
+                key_id = key_id_for(row["key_value"])
+                if key_id in seen:
+                    continue
+                keys.append(
+                    RuntimeAPIKey(
+                        id=key_id,
+                        key=row["key_value"],
+                        source="personal",
+                        is_default=False,
+                        owner_user_id=user.id,
+                        owner_username=user.username,
+                    )
                 )
-            )
-            seen.add(key_id)
+                seen.add(key_id)
 
-        for item in self._load_items():
-            key_id = key_id_for(item.key)
+        for row in self._fetch_rows(owner_user_id=None, scope="global"):
+            key_id = key_id_for(row["key_value"])
             if key_id in seen:
                 continue
             keys.append(
                 RuntimeAPIKey(
                     id=key_id,
-                    key=item.key,
-                    source="stored",
+                    key=row["key_value"],
+                    source="global",
                     is_default=False,
+                    owner_user_id=None,
+                    owner_username=None,
                 )
             )
             seen.add(key_id)
 
+        if self.settings.gemini_api_key:
+            key_id = key_id_for(self.settings.gemini_api_key)
+            if key_id not in seen:
+                keys.append(
+                    RuntimeAPIKey(
+                        id=key_id,
+                        key=self.settings.gemini_api_key,
+                        source="system",
+                        is_default=True,
+                        owner_user_id=None,
+                        owner_username=None,
+                    )
+                )
         return keys
 
-    def list_keys(self) -> list[APIKeySummary]:
-        summaries: list[APIKeySummary] = []
-        stored_map = {key_id_for(item.key): item for item in self._load_items()}
-        for item in self.runtime_keys():
-            stored = stored_map.get(item.id)
+    def list_personal_keys(self, user: UserRecord) -> list[APIKeySummary]:
+        return [
+            APIKeySummary(
+                id=key_id_for(row["key_value"]),
+                source="personal",
+                masked=mask_key(row["key_value"]),
+                is_default=False,
+                owner_user_id=user.id,
+                owner_username=user.username,
+                created_at=row["created_at"],
+            )
+            for row in self._fetch_rows(owner_user_id=user.id, scope="user")
+        ]
+
+    def list_global_keys(self) -> list[APIKeySummary]:
+        summaries = [
+            APIKeySummary(
+                id=key_id_for(row["key_value"]),
+                source="global",
+                masked=mask_key(row["key_value"]),
+                is_default=False,
+                owner_user_id=None,
+                owner_username=None,
+                created_at=row["created_at"],
+            )
+            for row in self._fetch_rows(owner_user_id=None, scope="global")
+        ]
+        if self.settings.gemini_api_key:
             summaries.append(
                 APIKeySummary(
-                    id=item.id,
-                    source=item.source,
-                    masked=mask_key(item.key),
-                    is_default=item.is_default,
-                    added_at=stored.added_at if stored else None,
+                    id=key_id_for(self.settings.gemini_api_key),
+                    source="system",
+                    masked=mask_key(self.settings.gemini_api_key),
+                    is_default=True,
+                    owner_user_id=None,
+                    owner_username=None,
+                    created_at=None,
                 )
             )
         return summaries
 
-    def add_key(self, raw_key: str) -> None:
+    def add_user_key(self, user: UserRecord, raw_key: str) -> None:
+        self._add_key(raw_key, owner_user_id=user.id, scope="user")
+
+    def add_global_key(self, raw_key: str) -> None:
+        self._add_key(raw_key, owner_user_id=None, scope="global")
+
+    def remove_user_key(self, user: UserRecord, key_id: str) -> None:
+        with self.user_store._connect() as conn:
+            self._ensure_hash_column(conn)
+            conn.execute(
+                "DELETE FROM api_keys WHERE owner_user_id = ? AND scope = 'user' AND key_value_hash = ?",
+                (user.id, key_id),
+            )
+            conn.commit()
+
+    def remove_global_key(self, key_id: str) -> None:
+        with self.user_store._connect() as conn:
+            self._ensure_hash_column(conn)
+            conn.execute(
+                "DELETE FROM api_keys WHERE owner_user_id IS NULL AND scope = 'global' AND key_value_hash = ?",
+                (key_id,),
+            )
+            conn.commit()
+
+    def _add_key(self, raw_key: str, *, owner_user_id: int | None, scope: str) -> None:
         value = raw_key.strip()
         if not value:
             raise ValueError("API key cannot be empty")
+        key_id = key_id_for(value)
 
-        items = self._load_items()
-        candidate_id = key_id_for(value)
-        if self.settings.gemini_api_key and candidate_id == key_id_for(
+        if self.settings.gemini_api_key and key_id == key_id_for(
             self.settings.gemini_api_key
         ):
             return
-        if any(key_id_for(item.key) == candidate_id for item in items):
-            return
-        items.append(StoredAPIKey(key=value))
-        self._save_items(items)
 
-    def remove_key(self, key_id: str) -> None:
-        items = [item for item in self._load_items() if key_id_for(item.key) != key_id]
-        self._save_items(items)
+        with self.user_store._connect() as conn:
+            self._ensure_hash_column(conn)
+            existing = conn.execute(
+                "SELECT id FROM api_keys WHERE key_value_hash = ?",
+                (key_id,),
+            ).fetchone()
+            if existing:
+                return
+            conn.execute(
+                "INSERT INTO api_keys (owner_user_id, scope, key_value, created_at, key_value_hash) VALUES (?, ?, ?, ?, ?)",
+                (owner_user_id, scope, value, _utc_now(), key_id),
+            )
+            conn.commit()
 
-    def _load_items(self) -> list[StoredAPIKey]:
-        if not self.path.exists():
-            return []
-        payload = json.loads(self.path.read_text(encoding="utf-8"))
-        return [StoredAPIKey.model_validate(item) for item in payload]
+    def _fetch_rows(
+        self, *, owner_user_id: int | None, scope: str
+    ) -> list[sqlite3.Row]:
+        with self.user_store._connect() as conn:
+            self._ensure_hash_column(conn)
+            if owner_user_id is None:
+                rows = conn.execute(
+                    "SELECT * FROM api_keys WHERE owner_user_id IS NULL AND scope = ? ORDER BY id ASC",
+                    (scope,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM api_keys WHERE owner_user_id = ? AND scope = ? ORDER BY id ASC",
+                    (owner_user_id, scope),
+                ).fetchall()
+        return rows
 
-    def _save_items(self, items: list[StoredAPIKey]) -> None:
-        atomic_write_text(
-            self.path, json.dumps([item.model_dump() for item in items], indent=2)
-        )
+    @staticmethod
+    def _ensure_hash_column(conn: sqlite3.Connection) -> None:
+        columns = [
+            row[1] for row in conn.execute("PRAGMA table_info(api_keys)").fetchall()
+        ]
+        if "key_value_hash" not in columns:
+            conn.execute("ALTER TABLE api_keys ADD COLUMN key_value_hash TEXT")
+            rows = conn.execute("SELECT id, key_value FROM api_keys").fetchall()
+            for row in rows:
+                conn.execute(
+                    "UPDATE api_keys SET key_value_hash = ? WHERE id = ?",
+                    (key_id_for(row["key_value"]), row["id"]),
+                )
+            conn.commit()

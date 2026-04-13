@@ -11,8 +11,9 @@ from fanfictl.models import Work, WorkKind
 
 def build_combined_markdown(work: Work) -> str:
     parts = [f"# {work.translated_title or work.original_title}", ""]
-    if work.description:
-        parts.extend([work.description, ""])
+    summary = work.translated_description or work.description
+    if summary:
+        parts.extend([summary, ""])
 
     for idx, chapter in enumerate(work.chapters):
         if idx > 0:
@@ -31,7 +32,9 @@ def write_text(path: Path, markdown: str) -> None:
 
 
 def write_html(path: Path, markdown: str, title: str) -> None:
-    body = MarkdownIt("commonmark", {"html": True, "linkify": True}).render(markdown)
+    body = MarkdownIt(
+        "commonmark", {"html": True, "linkify": True, "breaks": True}
+    ).render(markdown)
     document = f"""<!doctype html>
 <html lang=\"en\">
   <head>
@@ -62,7 +65,7 @@ def write_epub(path: Path, work: Work) -> None:
 
     nav_items = []
     spine = ["nav"]
-    md = MarkdownIt("commonmark", {"html": True, "linkify": True})
+    md = MarkdownIt("commonmark", {"html": True, "linkify": True, "breaks": True})
 
     for chapter in work.chapters:
         chapter_title = chapter.translated_title or chapter.original_title

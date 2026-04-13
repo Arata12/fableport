@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from fanfictl.auth import UserStore
 from fanfictl.config import Settings
 from fanfictl.keystore import APIKeyStore
 from fanfictl.models import Chapter, Work, WorkKind
@@ -63,9 +64,11 @@ class WebTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 200)
             self.assertIn("New import", response.text)
-            self.assertIn("English Title", response.text)
             self.assertIn("Gemma quota", response.text)
-            self.assertIn("Fallback keys", response.text)
+
+            response = client.get("/dashboard/library")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("English Title", response.text)
 
             response = client.get("/read/publictoken-english-title")
             self.assertEqual(response.status_code, 200)
@@ -128,14 +131,48 @@ class WebTests(unittest.TestCase):
             client = TestClient(app)
             client.post("/login", data={"username": "admin", "password": "admin"})
             response = client.post(
-                "/keys",
+                "/keys/personal",
                 data={"api_key": "extra-fallback-key"},
                 follow_redirects=True,
             )
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn("Fallback keys", response.text)
-            self.assertEqual(len(APIKeyStore(settings).runtime_keys()), 2)
+            self.assertIn("Personal API keys", response.text)
+            user_store = UserStore(settings)
+            user = user_store.authenticate("admin", "admin")
+            self.assertIsNotNone(user)
+            self.assertEqual(
+                len(APIKeyStore(settings, user_store).runtime_keys_for_user(user)), 2
+            )
+
+    def test_user_can_change_password_in_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "output"
+            settings = Settings()
+            settings.output_dir = output_dir
+            settings.app_base_url = "http://localhost:8000"
+            settings.app_secret_key = "test-secret"
+            settings.admin_username = "admin"
+            settings.admin_password = "admin"
+
+            app = build_app(settings)
+            client = TestClient(app)
+            client.post("/login", data={"username": "admin", "password": "admin"})
+            response = client.post(
+                "/account/password",
+                data={
+                    "current_password": "admin",
+                    "new_password": "better-password",
+                    "confirm_password": "better-password",
+                },
+                follow_redirects=True,
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("Account", response.text)
+            self.assertIsNotNone(
+                UserStore(settings).authenticate("admin", "better-password")
+            )
 
     def test_submit_blocked_when_daily_quota_exhausted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -149,7 +186,12 @@ class WebTests(unittest.TestCase):
             settings.gemini_rpm_limit = settings.gemini_rpd_limit + 1
             settings.gemini_api_key = "env-primary-key"
 
-            tracker = QuotaTracker(settings, APIKeyStore(settings).runtime_keys())
+            user_store = UserStore(settings)
+            user = user_store.authenticate("admin", "admin")
+            self.assertIsNotNone(user)
+            tracker = QuotaTracker(
+                settings, APIKeyStore(settings, user_store).runtime_keys_for_user(user)
+            )
             for _ in range(settings.gemini_rpd_limit):
                 tracker.acquire_request_slot()
 

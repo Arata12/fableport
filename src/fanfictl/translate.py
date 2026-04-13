@@ -6,6 +6,7 @@ from typing import Callable
 from google import genai
 from google.genai import types
 
+from fanfictl.content import normalize_translated_english_text
 from fanfictl.keystore import RuntimeAPIKey
 from fanfictl.models import Checkpoint, CheckpointChapter, Work
 from fanfictl.quota import DailyQuotaExceeded, QuotaTracker
@@ -13,9 +14,14 @@ from fanfictl.quota import DailyQuotaExceeded, QuotaTracker
 
 TITLE_SYSTEM = "You translate Pixiv fanfiction titles into natural English. Return only the translated title."
 
+DESCRIPTION_SYSTEM = (
+    "You translate fanfiction summaries into natural English. Preserve meaning and tone, but keep it concise and readable. "
+    'Use standard English double quotation marks (") for dialogue. Return only the translated summary.'
+)
+
 PROSE_SYSTEM = (
     "You are translating fanfiction prose into natural English. Preserve all meaning, tone, markdown structure, scene breaks, and links. "
-    "Do not summarize, censor, or omit content. Return only the translated markdown."
+    'Do not summarize, censor, or omit content. Use standard English double quotation marks (") for dialogue consistently. Return only the translated markdown.'
 )
 
 
@@ -34,10 +40,20 @@ class GeminiStudioProvider:
         self.quota_tracker = quota_tracker
 
     def translate_title(self, original_title: str) -> str:
-        return self._generate(
-            system_instruction=TITLE_SYSTEM,
-            prompt=f"Translate this title into natural English: {original_title}",
-        ).strip()
+        return normalize_translated_english_text(
+            self._generate(
+                system_instruction=TITLE_SYSTEM,
+                prompt=f"Translate this title into natural English: {original_title}",
+            ).strip()
+        )
+
+    def translate_description(self, description: str) -> str:
+        return normalize_translated_english_text(
+            self._generate(
+                system_instruction=DESCRIPTION_SYSTEM,
+                prompt=f"Translate this summary into natural English:\n\n{description}",
+            ).strip()
+        )
 
     def translate_chunk(self, chunk: str, previous_context: str | None = None) -> str:
         prompt = chunk
@@ -48,7 +64,9 @@ class GeminiStudioProvider:
                 "Now translate the next markdown chunk:\n"
                 f"{chunk}"
             )
-        return self._generate(system_instruction=PROSE_SYSTEM, prompt=prompt).strip()
+        return normalize_translated_english_text(
+            self._generate(system_instruction=PROSE_SYSTEM, prompt=prompt).strip()
+        )
 
     def _generate(self, system_instruction: str, prompt: str) -> str:
         last_error: Exception | None = None
@@ -124,6 +142,19 @@ def translate_work(
             checkpoint_callback(checkpoint)
     else:
         work.translated_title = checkpoint.translated_title
+
+    if work.description:
+        if not checkpoint.translated_description:
+            if progress_callback:
+                progress_callback(
+                    "summary", 0, len(work.chapters), "Translating synopsis"
+                )
+            checkpoint.translated_description = provider.translate_description(
+                work.description
+            )
+            if checkpoint_callback:
+                checkpoint_callback(checkpoint)
+        work.translated_description = checkpoint.translated_description
 
     for chapter in work.chapters:
         state = checkpoint.chapter_states.setdefault(

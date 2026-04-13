@@ -41,6 +41,49 @@ def markdown_to_text(markdown: str) -> str:
     return text.strip() + "\n"
 
 
+TRANSLATED_DOUBLE_QUOTES = str.maketrans(
+    {
+        "「": '"',
+        "」": '"',
+        "『": '"',
+        "』": '"',
+        "“": '"',
+        "”": '"',
+        "„": '"',
+        "‟": '"',
+        "〝": '"',
+        "〞": '"',
+        "＂": '"',
+        "«": '"',
+        "»": '"',
+        "‹": '"',
+        "›": '"',
+    }
+)
+
+
+def normalize_translated_english_text(text: str) -> str:
+    value = text.translate(TRANSLATED_DOUBLE_QUOTES)
+    value = re.sub(r'"{2,}', '"', value)
+    value = re.sub(
+        r"^[ \t]*[—–―-][ \t]*(.+)$",
+        _normalize_dialogue_dash_line,
+        value,
+        flags=re.MULTILINE,
+    )
+    return value
+
+
+def _normalize_dialogue_dash_line(match: re.Match[str]) -> str:
+    body = match.group(1).strip()
+    if not body:
+        return match.group(0)
+    attribution = re.match(r"^(.*?)(?:\s+[—–―-]\s+)(.+)$", body)
+    if attribution:
+        return f'"{attribution.group(1).strip()}" {attribution.group(2).strip()}'
+    return f'"{body}"'
+
+
 def _collapse_whitespace(text: str) -> str:
     text = re.sub(r"\n{4,}", "\n\n\n", text)
     return text

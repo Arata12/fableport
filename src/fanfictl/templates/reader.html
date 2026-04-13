@@ -4,6 +4,9 @@
   <header class="reader-head">
     <h1>{{ entry.work.translated_title or entry.work.original_title }}</h1>
     <p class="reader-meta">{{ entry.work.author_name }} · <a href="{{ entry.work.source_url }}">Pixiv source</a></p>
+    {% if entry.work.translated_description or entry.work.description %}
+      <p class="reader-summary">{{ entry.work.translated_description or entry.work.description }}</p>
+    {% endif %}
     <div class="reader-actions">
       {% for fmt in entry.outputs.keys() %}
         <a class="button button--ghost" href="/download/{{ entry.work.public_id }}/{{ fmt }}">{{ fmt|upper }}</a>
