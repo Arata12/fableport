@@ -51,6 +51,7 @@ p { margin: 0 0 12px; }
 .small { font-size: 13px; }
 .stack-16 > * + * { margin-top: 16px; }
 .stack-20 > * + * { margin-top: 20px; }
+.top-gap-12 { margin-top: 12px; }
 .section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 20px; margin-bottom: 12px; }
 
 label, fieldset { display: block; }

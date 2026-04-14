@@ -202,7 +202,7 @@
   <section class="panel">
     <h2>Personal Pixiv token</h2>
     <p class="muted">Used first for your own imports when a Pixiv work requires login.</p>
-    <p class="muted small">Use the bundled helper: <code>python scripts/pixiv_refresh_token.py login</code></p>
+    <p class="muted small">You can still use the bundled helper locally, but you can also complete the login flow directly from this page.</p>
     {% if personal_pixiv_tokens %}
       <ul class="key-list">
         {% for token in personal_pixiv_tokens %}
@@ -228,6 +228,19 @@
       </label>
       <button class="button" type="submit">Add personal token</button>
     </form>
+    <h3 class="subhead">Get personal token through Pixiv login</h3>
+    <form action="/pixiv/personal/oauth/start" method="post" class="stack-16">
+      <button class="button button--ghost" type="submit">Open Pixiv login</button>
+    </form>
+    {% if pixiv_oauth_pending_scope == 'personal' %}
+      <form action="/pixiv/oauth/complete" method="post" class="stack-16 top-gap-12">
+        <label>
+          <span>Paste the callback URL or the <code>code</code> value from Pixiv</span>
+          <input name="callback_input" type="text" placeholder="https://app-api.pixiv.net/...&code=..." required>
+        </label>
+        <button class="button" type="submit">Finish personal Pixiv login</button>
+      </form>
+    {% endif %}
   </section>
 
   {% if current_user.role == 'admin' %}
@@ -297,6 +310,19 @@
       </label>
       <button class="button" type="submit">Add global token</button>
     </form>
+    <h3 class="subhead">Get global token through Pixiv login</h3>
+    <form action="/pixiv/global/oauth/start" method="post" class="stack-16">
+      <button class="button button--ghost" type="submit">Open Pixiv login</button>
+    </form>
+    {% if pixiv_oauth_pending_scope == 'global' %}
+      <form action="/pixiv/oauth/complete" method="post" class="stack-16 top-gap-12">
+        <label>
+          <span>Paste the callback URL or the <code>code</code> value from Pixiv</span>
+          <input name="callback_input" type="text" placeholder="https://app-api.pixiv.net/...&code=..." required>
+        </label>
+        <button class="button" type="submit">Finish global Pixiv login</button>
+      </form>
+    {% endif %}
   </section>
 
   <section class="panel panel--wide">

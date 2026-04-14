@@ -22,6 +22,11 @@ from fanfictl.library import (
     render_work_html,
 )
 from fanfictl.models import ExportFormat
+from fanfictl.pixiv_oauth import (
+    create_oauth_session,
+    exchange_code_for_token,
+    extract_code,
+)
 from fanfictl.quota import QuotaTracker
 from fanfictl.pixiv_tokens import PixivTokenStore
 
@@ -96,6 +101,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                     user
                 ),
                 "global_pixiv_tokens": app.state.pixiv_token_store.list_global_tokens(),
+                "pixiv_oauth_pending_scope": request.session.get("pixiv_oauth_scope"),
                 "users": app.state.user_store.list_users()
                 if user.role == "admin"
                 else [],
@@ -283,6 +289,17 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             )
         return RedirectResponse("/dashboard/settings", status_code=303)
 
+    @app.post("/pixiv/personal/oauth/start")
+    def start_personal_pixiv_oauth(request: Request):
+        redirect = require_login(request)
+        if redirect:
+            return redirect
+        verifier, state, auth_url = create_oauth_session()
+        request.session["pixiv_oauth_verifier"] = verifier
+        request.session["pixiv_oauth_state"] = state
+        request.session["pixiv_oauth_scope"] = "personal"
+        return RedirectResponse(auth_url, status_code=303)
+
     @app.post("/pixiv/personal/{token_id}/delete")
     def delete_personal_pixiv_token(request: Request, token_id: str):
         redirect = require_login(request)
@@ -307,12 +324,73 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             )
         return RedirectResponse("/dashboard/settings", status_code=303)
 
+    @app.post("/pixiv/global/oauth/start")
+    def start_global_pixiv_oauth(request: Request):
+        redirect = require_admin(request)
+        if redirect:
+            return redirect
+        verifier, state, auth_url = create_oauth_session()
+        request.session["pixiv_oauth_verifier"] = verifier
+        request.session["pixiv_oauth_state"] = state
+        request.session["pixiv_oauth_scope"] = "global"
+        return RedirectResponse(auth_url, status_code=303)
+
     @app.post("/pixiv/global/{token_id}/delete")
     def delete_global_pixiv_token(request: Request, token_id: str):
         redirect = require_admin(request)
         if redirect:
             return redirect
         app.state.pixiv_token_store.remove_global_token(token_id)
+        return RedirectResponse("/dashboard/settings", status_code=303)
+
+    @app.post("/pixiv/oauth/complete")
+    def complete_pixiv_oauth(request: Request, callback_input: str = Form(...)):
+        redirect = require_login(request)
+        if redirect:
+            return redirect
+        user = current_user(request)
+        if not user:
+            return RedirectResponse("/login", status_code=303)
+        verifier = request.session.get("pixiv_oauth_verifier")
+        scope = request.session.get("pixiv_oauth_scope")
+        if not verifier or not scope:
+            return render_dashboard(
+                request,
+                error="Start the Pixiv login flow first before completing it.",
+                status_code=400,
+                active_tab="settings",
+            )
+        code = extract_code(callback_input.strip())
+        if not code:
+            return render_dashboard(
+                request,
+                error="Could not extract a Pixiv OAuth code from that input.",
+                status_code=400,
+                active_tab="settings",
+            )
+        try:
+            payload = exchange_code_for_token(code=code, code_verifier=verifier)
+            refresh_token = payload.get("refresh_token", "")
+            if not refresh_token:
+                raise RuntimeError("Pixiv OAuth did not return a refresh token")
+            if scope == "global":
+                if user.role != "admin":
+                    raise RuntimeError("Only admins can store global Pixiv tokens")
+                app.state.pixiv_token_store.add_global_token(refresh_token)
+            else:
+                app.state.pixiv_token_store.add_user_token(user, refresh_token)
+        except Exception as exc:  # noqa: BLE001
+            return render_dashboard(
+                request,
+                error=f"Pixiv OAuth exchange failed: {exc}",
+                status_code=400,
+                active_tab="settings",
+            )
+        finally:
+            request.session.pop("pixiv_oauth_verifier", None)
+            request.session.pop("pixiv_oauth_state", None)
+            request.session.pop("pixiv_oauth_scope", None)
+
         return RedirectResponse("/dashboard/settings", status_code=303)
 
     @app.post("/users")

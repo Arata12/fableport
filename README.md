@@ -130,8 +130,17 @@ Important ones:
 
 Recommended method:
 
-1. use the bundled helper in this repo
-2. run locally:
+You can do this directly inside **Settings** now:
+
+1. open `Settings`
+2. in the Pixiv token section, click **Open Pixiv login**
+3. sign into Pixiv
+4. copy the callback URL or the `code`
+5. paste it back into Fableport
+
+Or use the bundled helper:
+
+1. run locally:
 
 ```bash
 python scripts/pixiv_refresh_token.py login
@@ -143,10 +152,10 @@ Or with Docker:
 docker compose --profile tools run --rm --entrypoint python cli /app/scripts/pixiv_refresh_token.py login
 ```
 
-3. a browser window will open to Pixiv login
-4. sign in normally
-5. after the callback step, paste the full callback URL or the `code` into the helper prompt
-6. the helper prints the `refresh_token`
+2. a browser window will open to Pixiv login
+3. sign in normally
+4. after the callback step, paste the full callback URL or the `code` into the helper prompt
+5. the helper prints the `refresh_token`
 6. paste that token into Fableport Settings, or store it as `PIXIV_REFRESH_TOKEN` in `.env`
 
 Notes:

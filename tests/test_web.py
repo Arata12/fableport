@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -167,6 +168,52 @@ class WebTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertIn("Personal Pixiv token", response.text)
+            user_store = UserStore(settings)
+            user = user_store.authenticate("admin", "admin")
+            self.assertIsNotNone(user)
+            self.assertEqual(
+                len(
+                    PixivTokenStore(settings, user_store).runtime_tokens_for_user(user)
+                ),
+                1,
+            )
+
+    def test_can_complete_personal_pixiv_oauth_from_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "output"
+            settings = Settings()
+            settings.output_dir = output_dir
+            settings.app_base_url = "http://localhost:8000"
+            settings.app_secret_key = "test-secret"
+            settings.admin_username = "admin"
+            settings.admin_password = "admin"
+
+            app = build_app(settings)
+            client = TestClient(app)
+            client.post("/login", data={"username": "admin", "password": "admin"})
+
+            with patch(
+                "fanfictl.webapp.create_oauth_session",
+                return_value=("verifier123", "state123", "https://pixiv.example/login"),
+            ):
+                response = client.post(
+                    "/pixiv/personal/oauth/start", follow_redirects=False
+                )
+                self.assertEqual(response.status_code, 303)
+
+            with patch(
+                "fanfictl.webapp.exchange_code_for_token",
+                return_value={"refresh_token": "oauth-personal-token"},
+            ):
+                response = client.post(
+                    "/pixiv/oauth/complete",
+                    data={
+                        "callback_input": "https://app-api.pixiv.net/web/v1/users/auth/pixiv/callback?code=abc123&state=state123"
+                    },
+                    follow_redirects=True,
+                )
+
+            self.assertEqual(response.status_code, 200)
             user_store = UserStore(settings)
             user = user_store.authenticate("admin", "admin")
             self.assertIsNotNone(user)

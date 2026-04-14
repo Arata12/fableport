@@ -105,7 +105,15 @@ Behavior:
 
 ### Getting a Pixiv refresh token
 
-Use the bundled helper:
+Use the in-app Settings flow:
+
+1. go to `Settings`
+2. click `Open Pixiv login`
+3. sign into Pixiv
+4. copy the callback URL or the `code`
+5. paste it into the completion form in Fableport
+
+You can also use the bundled helper:
 
 ```bash
 python scripts/pixiv_refresh_token.py login

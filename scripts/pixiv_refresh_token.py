@@ -2,22 +2,15 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import hashlib
-import secrets
 import sys
-import urllib.parse
 import webbrowser
 
-import httpx
-
-
-CLIENT_ID = "MOBrBDS8blbauoSck0ZfDbtuzpyT"
-CLIENT_SECRET = "lsACyCD94FhDUtGTXi3QzcFE2uU1hqtDaKeqrdwj"
-REDIRECT_URI = "https://app-api.pixiv.net/web/v1/users/auth/pixiv/callback"
-AUTH_URL = "https://app-api.pixiv.net/web/v1/login"
-TOKEN_URL = "https://oauth.secure.pixiv.net/auth/token"
-USER_AGENT = "PixivAndroidApp/5.0.234 (Android 11; Pixel 5)"
+from fanfictl.pixiv_oauth import (
+    create_oauth_session,
+    exchange_code_for_token,
+    extract_code,
+    refresh_access_token,
+)
 
 
 def main() -> int:
@@ -46,19 +39,7 @@ def main() -> int:
 
 
 def run_login(*, no_browser: bool) -> int:
-    verifier = _create_code_verifier()
-    challenge = _create_code_challenge(verifier)
-    state = secrets.token_urlsafe(16)
-
-    params = {
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-        "client": "pixiv-android",
-        "redirect_uri": REDIRECT_URI,
-        "response_type": "code",
-        "state": state,
-    }
-    url = f"{AUTH_URL}?{urllib.parse.urlencode(params)}"
+    verifier, _state, url = create_oauth_session()
 
     print("Open this URL and sign into Pixiv:")
     print(url)
@@ -72,7 +53,7 @@ def run_login(*, no_browser: bool) -> int:
         webbrowser.open(url)
 
     pasted = input("Callback URL or code: ").strip()
-    code = _extract_code(pasted)
+    code = extract_code(pasted)
     if not code:
         print("Could not extract a Pixiv OAuth code from your input.", file=sys.stderr)
         return 2
@@ -88,48 +69,6 @@ def run_refresh(refresh_token: str) -> int:
     return 0
 
 
-def exchange_code_for_token(*, code: str, code_verifier: str) -> dict:
-    data = {
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "code": code,
-        "code_verifier": code_verifier,
-        "grant_type": "authorization_code",
-        "include_policy": "true",
-        "redirect_uri": REDIRECT_URI,
-    }
-    return _post_token_request(data)
-
-
-def refresh_access_token(refresh_token: str) -> dict:
-    data = {
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "grant_type": "refresh_token",
-        "include_policy": "true",
-        "refresh_token": refresh_token,
-    }
-    return _post_token_request(data)
-
-
-def _post_token_request(data: dict) -> dict:
-    response = httpx.post(
-        TOKEN_URL,
-        data=data,
-        headers={
-            "User-Agent": USER_AGENT,
-            "App-OS": "android",
-            "App-OS-Version": "11",
-        },
-        timeout=30.0,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if payload.get("has_error") or payload.get("error"):
-        raise RuntimeError(payload)
-    return payload
-
-
 def print_token_result(payload: dict) -> None:
     print()
     print("Pixiv OAuth succeeded.")
@@ -143,24 +82,6 @@ def print_token_result(payload: dict) -> None:
     print(
         "Use the refresh_token in Fableport Settings or in .env as PIXIV_REFRESH_TOKEN."
     )
-
-
-def _create_code_verifier() -> str:
-    return secrets.token_urlsafe(32)
-
-
-def _create_code_challenge(verifier: str) -> str:
-    digest = hashlib.sha256(verifier.encode("utf-8")).digest()
-    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-
-
-def _extract_code(value: str) -> str | None:
-    if "code=" in value:
-        parsed = urllib.parse.urlparse(value)
-        query = urllib.parse.parse_qs(parsed.query)
-        code = query.get("code", [None])[0]
-        return code
-    return value or None
 
 
 if __name__ == "__main__":
