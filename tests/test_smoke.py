@@ -42,11 +42,15 @@ class SmokeTests(unittest.TestCase):
 
     def test_markdown_normalization(self) -> None:
         markdown = normalize_pixiv_text_to_markdown(
-            "[chapter:Start]\nHello\n[newpage]\n[[jumpuri:Pixiv > https://www.pixiv.net]]\n[[rb:漢字 > かんじ]]",
+            "[chapter:Start]\nHello\n[newpage]\n[uploadedimage:42]\n[[jumpuri:Pixiv > https://www.pixiv.net]]\n[[rb:漢字 > かんじ]]",
             chapter_title="Title",
+            embedded_images={"42": "https://i.pximg.net/example.jpg"},
         )
         self.assertIn("# Title", markdown)
         self.assertIn("## Start", markdown)
+        self.assertIn(
+            "![Pixiv embedded image 42](https://i.pximg.net/example.jpg)", markdown
+        )
         self.assertIn("[Pixiv](https://www.pixiv.net)", markdown)
         self.assertIn("<ruby>漢字<rt>かんじ</rt></ruby>", markdown)
 

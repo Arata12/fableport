@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import secrets
+from urllib.parse import urlparse
 
 import uvicorn
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -26,6 +28,7 @@ from fanfictl.pixiv_oauth import (
     create_oauth_session,
     exchange_code_for_token,
     extract_code,
+    looks_like_intermediate_redirect,
 )
 from fanfictl.quota import QuotaTracker
 from fanfictl.pixiv_tokens import PixivTokenStore
@@ -46,7 +49,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "Refusing to start with the default APP_SECRET_KEY on a non-local APP_BASE_URL."
         )
     app = FastAPI(title="Fableport")
-    app.add_middleware(SessionMiddleware, secret_key=settings.app_secret_key)
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.app_secret_key,
+        https_only=should_use_secure_session_cookie(settings.app_base_url),
+        same_site="lax",
+        session_cookie="fableport_session",
+    )
     app.mount(
         "/static", StaticFiles(directory=str(PACKAGE_ROOT / "static")), name="static"
     )
@@ -59,6 +68,22 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         user_store=app.state.user_store,
         key_store=app.state.key_store,
     )
+
+    def template_response(
+        request: Request,
+        template_name: str,
+        context: dict,
+        *,
+        status_code: int = 200,
+    ):
+        payload = dict(context)
+        payload.setdefault("csrf_token", ensure_csrf_token(request))
+        return TEMPLATES.TemplateResponse(
+            request,
+            template_name,
+            payload,
+            status_code=status_code,
+        )
 
     def render_dashboard(
         request: Request,
@@ -83,7 +108,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 if job.owner_user_id == user.id
             ][:10]
         )
-        return TEMPLATES.TemplateResponse(
+        return template_response(
             request,
             "dashboard.html",
             {
@@ -119,7 +144,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/login", response_class=HTMLResponse)
     def login_page(request: Request, error: str | None = None):
-        return TEMPLATES.TemplateResponse(
+        return template_response(
             request,
             "login.html",
             {
@@ -130,14 +155,22 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.post("/login")
-    def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    def login(
+        request: Request,
+        username: str = Form(...),
+        password: str = Form(...),
+        csrf_token: str = Form(...),
+    ):
+        validate_csrf(request, csrf_token)
         user = app.state.user_store.authenticate(username, password)
         if user:
+            request.session.clear()
+            request.session["csrf_token"] = new_csrf_token()
             request.session["user_id"] = user.id
             request.session["username"] = user.username
             request.session["role"] = user.role
             return RedirectResponse("/dashboard", status_code=303)
-        return TEMPLATES.TemplateResponse(
+        return template_response(
             request,
             "login.html",
             {
@@ -149,7 +182,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.post("/logout")
-    def logout(request: Request):
+    def logout(request: Request, csrf_token: str = Form(...)):
+        validate_csrf(request, csrf_token)
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
 
@@ -178,6 +212,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def submit(
         request: Request,
         source_url: str = Form(...),
+        csrf_token: str = Form(...),
         resume: str | None = Form(None),
         chapter_limit: int | None = Form(None),
         export_md: str | None = Form(None),
@@ -188,6 +223,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         redirect = require_login(request)
         if redirect:
             return redirect
+        validate_csrf(request, csrf_token)
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
@@ -226,10 +262,15 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(f"/jobs/{job.id}", status_code=303)
 
     @app.post("/keys/personal")
-    def add_personal_key(request: Request, api_key: str = Form(...)):
+    def add_personal_key(
+        request: Request,
+        api_key: str = Form(...),
+        csrf_token: str = Form(...),
+    ):
         redirect = require_login(request)
         if redirect:
             return redirect
+        validate_csrf(request, csrf_token)
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
@@ -242,10 +283,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse("/dashboard/settings", status_code=303)
 
     @app.post("/keys/personal/{key_id}/delete")
-    def delete_personal_key(request: Request, key_id: str):
+    def delete_personal_key(request: Request, key_id: str, csrf_token: str = Form(...)):
         redirect = require_login(request)
         if redirect:
             return redirect
+        validate_csrf(request, csrf_token)
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
@@ -253,10 +295,15 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse("/dashboard/settings", status_code=303)
 
     @app.post("/keys/global")
-    def add_global_key(request: Request, api_key: str = Form(...)):
+    def add_global_key(
+        request: Request,
+        api_key: str = Form(...),
+        csrf_token: str = Form(...),
+    ):
         redirect = require_admin(request)
         if redirect:
             return redirect
+        validate_csrf(request, csrf_token)
         try:
             app.state.key_store.add_global_key(api_key)
         except ValueError as exc:
@@ -266,18 +313,24 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse("/dashboard/settings", status_code=303)
 
     @app.post("/keys/global/{key_id}/delete")
-    def delete_global_key(request: Request, key_id: str):
+    def delete_global_key(request: Request, key_id: str, csrf_token: str = Form(...)):
         redirect = require_admin(request)
         if redirect:
             return redirect
+        validate_csrf(request, csrf_token)
         app.state.key_store.remove_global_key(key_id)
         return RedirectResponse("/dashboard/settings", status_code=303)
 
     @app.post("/pixiv/personal")
-    def add_personal_pixiv_token(request: Request, refresh_token: str = Form(...)):
+    def add_personal_pixiv_token(
+        request: Request,
+        refresh_token: str = Form(...),
+        csrf_token: str = Form(...),
+    ):
         redirect = require_login(request)
         if redirect:
             return redirect
+        validate_csrf(request, csrf_token)
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
@@ -289,22 +342,31 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             )
         return RedirectResponse("/dashboard/settings", status_code=303)
 
-    @app.post("/pixiv/personal/oauth/start")
-    def start_personal_pixiv_oauth(request: Request):
-        redirect = require_login(request)
-        if redirect:
-            return redirect
+    def _begin_pixiv_oauth(request: Request, scope: str) -> RedirectResponse:
         verifier, state, auth_url = create_oauth_session()
         request.session["pixiv_oauth_verifier"] = verifier
         request.session["pixiv_oauth_state"] = state
-        request.session["pixiv_oauth_scope"] = "personal"
+        request.session["pixiv_oauth_scope"] = scope
         return RedirectResponse(auth_url, status_code=303)
 
-    @app.post("/pixiv/personal/{token_id}/delete")
-    def delete_personal_pixiv_token(request: Request, token_id: str):
+    @app.post("/pixiv/personal/oauth/start")
+    def start_personal_pixiv_oauth(request: Request, csrf_token: str = Form(...)):
         redirect = require_login(request)
         if redirect:
             return redirect
+        validate_csrf(request, csrf_token)
+        return _begin_pixiv_oauth(request, "personal")
+
+    @app.post("/pixiv/personal/{token_id}/delete")
+    def delete_personal_pixiv_token(
+        request: Request,
+        token_id: str,
+        csrf_token: str = Form(...),
+    ):
+        redirect = require_login(request)
+        if redirect:
+            return redirect
+        validate_csrf(request, csrf_token)
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
@@ -312,10 +374,15 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse("/dashboard/settings", status_code=303)
 
     @app.post("/pixiv/global")
-    def add_global_pixiv_token(request: Request, refresh_token: str = Form(...)):
+    def add_global_pixiv_token(
+        request: Request,
+        refresh_token: str = Form(...),
+        csrf_token: str = Form(...),
+    ):
         redirect = require_admin(request)
         if redirect:
             return redirect
+        validate_csrf(request, csrf_token)
         try:
             app.state.pixiv_token_store.add_global_token(refresh_token)
         except ValueError as exc:
@@ -325,29 +392,36 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse("/dashboard/settings", status_code=303)
 
     @app.post("/pixiv/global/oauth/start")
-    def start_global_pixiv_oauth(request: Request):
+    def start_global_pixiv_oauth(request: Request, csrf_token: str = Form(...)):
         redirect = require_admin(request)
         if redirect:
             return redirect
-        verifier, state, auth_url = create_oauth_session()
-        request.session["pixiv_oauth_verifier"] = verifier
-        request.session["pixiv_oauth_state"] = state
-        request.session["pixiv_oauth_scope"] = "global"
-        return RedirectResponse(auth_url, status_code=303)
+        validate_csrf(request, csrf_token)
+        return _begin_pixiv_oauth(request, "global")
 
     @app.post("/pixiv/global/{token_id}/delete")
-    def delete_global_pixiv_token(request: Request, token_id: str):
+    def delete_global_pixiv_token(
+        request: Request,
+        token_id: str,
+        csrf_token: str = Form(...),
+    ):
         redirect = require_admin(request)
         if redirect:
             return redirect
+        validate_csrf(request, csrf_token)
         app.state.pixiv_token_store.remove_global_token(token_id)
         return RedirectResponse("/dashboard/settings", status_code=303)
 
     @app.post("/pixiv/oauth/complete")
-    def complete_pixiv_oauth(request: Request, callback_input: str = Form(...)):
+    def complete_pixiv_oauth(
+        request: Request,
+        callback_input: str = Form(...),
+        csrf_token: str = Form(...),
+    ):
         redirect = require_login(request)
         if redirect:
             return redirect
+        validate_csrf(request, csrf_token)
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
@@ -362,6 +436,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             )
         code = extract_code(callback_input.strip())
         if not code:
+            if looks_like_intermediate_redirect(callback_input):
+                return render_dashboard(
+                    request,
+                    error="That Pixiv URL is still an intermediate redirect and does not contain the OAuth code yet. Copy the final callback URL with code=... if it appears in the address bar, or open the browser Network tab and copy the callback?...code=... request URL instead.",
+                    status_code=400,
+                    active_tab="settings",
+                )
             return render_dashboard(
                 request,
                 error="Could not extract a Pixiv OAuth code from that input.",
@@ -399,10 +480,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         username: str = Form(...),
         password: str = Form(...),
         role: str = Form("user"),
+        csrf_token: str = Form(...),
     ):
         redirect = require_admin(request)
         if redirect:
             return redirect
+        validate_csrf(request, csrf_token)
         try:
             app.state.user_store.create_user(
                 username=username, password=password, role=role
@@ -419,10 +502,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         current_password: str = Form(...),
         new_password: str = Form(...),
         confirm_password: str = Form(...),
+        csrf_token: str = Form(...),
     ):
         redirect = require_login(request)
         if redirect:
             return redirect
+        validate_csrf(request, csrf_token)
         user = current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
@@ -449,7 +534,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         user = current_user(request)
         job = app.state.jobs.store.get(job_id)
         if not job or not user:
-            return TEMPLATES.TemplateResponse(
+            return template_response(
                 request, "not_found.html", {"title": "Job not found"}, status_code=404
             )
         if user.role != "admin" and job.owner_user_id != user.id:
@@ -459,7 +544,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             if job.work_root_name
             else None
         )
-        return TEMPLATES.TemplateResponse(
+        return template_response(
             request,
             "job.html",
             {
@@ -479,12 +564,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         user = current_user(request)
         entry = get_work_by_root_name(settings.output_dir, root_name)
         if not entry or not user:
-            return TEMPLATES.TemplateResponse(
+            return template_response(
                 request, "not_found.html", {"title": "Work not found"}, status_code=404
             )
         if user.role != "admin" and entry.work.owner_user_id != user.id:
             return RedirectResponse(entry.public_url_path, status_code=303)
-        return TEMPLATES.TemplateResponse(
+        return template_response(
             request,
             "work_detail.html",
             {
@@ -494,26 +579,67 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    @app.post("/works/{root_name}/retranslate")
+    def retranslate_work(
+        request: Request,
+        root_name: str,
+        csrf_token: str = Form(...),
+    ):
+        redirect = require_login(request)
+        if redirect:
+            return redirect
+        validate_csrf(request, csrf_token)
+        user = current_user(request)
+        entry = get_work_by_root_name(settings.output_dir, root_name)
+        if not entry or not user:
+            return template_response(
+                request, "not_found.html", {"title": "Work not found"}, status_code=404
+            )
+        if user.role != "admin" and entry.work.owner_user_id != user.id:
+            return RedirectResponse("/dashboard", status_code=303)
+
+        owner_user = (
+            app.state.user_store.get_user(entry.work.owner_user_id)
+            if entry.work.owner_user_id is not None
+            else None
+        )
+        formats = [ExportFormat(fmt) for fmt in entry.outputs.keys()] or [
+            ExportFormat.MD,
+            ExportFormat.TXT,
+            ExportFormat.HTML,
+            ExportFormat.EPUB,
+        ]
+        job = app.state.jobs.start_job(
+            entry.work.source_url,
+            resume=False,
+            chapter_limit=None,
+            formats=formats,
+            model=None,
+            owner_user=owner_user,
+        )
+        return RedirectResponse(f"/jobs/{job.id}", status_code=303)
+
     @app.get("/read/{token_slug}", response_class=HTMLResponse)
     def read_work(request: Request, token_slug: str):
         user = current_user(request)
         public_id = token_slug.split("-", 1)[0]
         entry = get_work_by_public_id(settings.output_dir, public_id)
         if not entry:
-            return TEMPLATES.TemplateResponse(
+            return template_response(
                 request,
                 "not_found.html",
                 {"title": "Work not found", "public": True},
                 status_code=404,
             )
         if entry.work.kind.value == "series":
-            return TEMPLATES.TemplateResponse(
+            return template_response(
                 request,
                 "reader_series.html",
                 {
                     "title": entry.work.translated_title or entry.work.original_title,
                     "entry": entry,
                     "current_user": user,
+                    "asset_base_href": f"/reader-assets/{entry.work.public_id}/",
                     "can_manage": bool(
                         user
                         and (
@@ -523,7 +649,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                     "public": True,
                 },
             )
-        return TEMPLATES.TemplateResponse(
+        return template_response(
             request,
             "reader.html",
             {
@@ -531,6 +657,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "entry": entry,
                 "body_html": render_work_html(entry.work),
                 "current_user": user,
+                "asset_base_href": f"/reader-assets/{entry.work.public_id}/",
                 "can_manage": bool(
                     user
                     and (user.role == "admin" or user.id == entry.work.owner_user_id)
@@ -545,14 +672,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         public_id = token_slug.split("-", 1)[0]
         entry = get_work_by_public_id(settings.output_dir, public_id)
         if not entry or chapter_no < 1 or chapter_no > len(entry.work.chapters):
-            return TEMPLATES.TemplateResponse(
+            return template_response(
                 request,
                 "not_found.html",
                 {"title": "Chapter not found", "public": True},
                 status_code=404,
             )
         chapter = entry.work.chapters[chapter_no - 1]
-        return TEMPLATES.TemplateResponse(
+        return template_response(
             request,
             "reader_chapter.html",
             {
@@ -562,6 +689,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "chapter_no": chapter_no,
                 "body_html": render_chapter_html(entry.work, chapter_no),
                 "current_user": user,
+                "asset_base_href": f"/reader-assets/{entry.work.public_id}/",
                 "can_manage": bool(
                     user
                     and (user.role == "admin" or user.id == entry.work.owner_user_id)
@@ -583,9 +711,20 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         path = entry.root / filename
         if not path.exists():
             return RedirectResponse(entry.public_url_path, status_code=303)
-        from fastapi.responses import FileResponse
-
         return FileResponse(path, filename=filename)
+
+    @app.get("/reader-assets/{public_id}/{asset_path:path}")
+    def reader_asset(public_id: str, asset_path: str):
+        entry = get_work_by_public_id(settings.output_dir, public_id)
+        if not entry:
+            return RedirectResponse("/", status_code=303)
+        requested = (entry.root / asset_path).resolve()
+        root = entry.root.resolve()
+        if root != requested and root not in requested.parents:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        if not requested.exists() or not requested.is_file():
+            raise HTTPException(status_code=404, detail="Asset not found")
+        return FileResponse(requested)
 
     return app
 
@@ -613,6 +752,55 @@ def require_admin(request: Request):
     if not user or user.role != "admin":
         return RedirectResponse("/login", status_code=303)
     return None
+
+
+def new_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def ensure_csrf_token(request: Request) -> str:
+    token = request.session.get("csrf_token")
+    if not token:
+        token = new_csrf_token()
+        request.session["csrf_token"] = token
+    return token
+
+
+def validate_csrf(request: Request, submitted_token: str) -> None:
+    session_token = request.session.get("csrf_token")
+    if not session_token or not submitted_token:
+        raise HTTPException(status_code=403, detail="Missing CSRF token")
+    if not secrets.compare_digest(session_token, submitted_token):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    validate_same_origin(request)
+
+
+def validate_same_origin(request: Request) -> None:
+    settings = getattr(request.app.state, "settings", None)
+    allowed = urlparse(
+        settings.app_base_url
+        if settings and getattr(settings, "app_base_url", None)
+        else str(request.base_url)
+    )
+    allowed_origin = f"{allowed.scheme}://{allowed.netloc}"
+    for header_name in ("origin", "referer"):
+        value = request.headers.get(header_name)
+        if not value:
+            continue
+        parsed = urlparse(value)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin != allowed_origin:
+            raise HTTPException(
+                status_code=403, detail="Cross-site form submission blocked"
+            )
+
+
+def should_use_secure_session_cookie(app_base_url: str) -> bool:
+    parsed = urlparse(app_base_url)
+    return parsed.scheme == "https" and parsed.hostname not in {
+        "localhost",
+        "127.0.0.1",
+    }
 
 
 def serve() -> None:

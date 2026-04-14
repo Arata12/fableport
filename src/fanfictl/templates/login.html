@@ -6,6 +6,7 @@
     <p class="muted">Access Fableport to import Pixiv works, manage jobs, and inspect stored translations.</p>
     {% if error %}<p class="notice notice--error">{{ error }}</p>{% endif %}
     <form action="/login" method="post" class="stack-16">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <label>
         <span>Username</span>
         <input name="username" type="text" autocomplete="username" required>

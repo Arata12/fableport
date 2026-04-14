@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 
 from ebooklib import epub
@@ -57,6 +58,7 @@ def write_html(path: Path, markdown: str, title: str) -> None:
 
 def write_epub(path: Path, work: Work) -> None:
     book = epub.EpubBook()
+    base_dir = path.parent
     title = work.translated_title or work.original_title
     book.set_identifier(str(work.pixiv_id))
     book.set_title(title)
@@ -82,6 +84,22 @@ def write_epub(path: Path, work: Work) -> None:
 
     book.toc = tuple(nav_items)
     book.spine = spine
+
+    for asset_path in sorted((base_dir / "assets").glob("**/*")):
+        if not asset_path.is_file():
+            continue
+        media_type = (
+            mimetypes.guess_type(asset_path.name)[0] or "application/octet-stream"
+        )
+        book.add_item(
+            epub.EpubItem(
+                uid=asset_path.stem,
+                file_name=asset_path.relative_to(base_dir).as_posix(),
+                media_type=media_type,
+                content=asset_path.read_bytes(),
+            )
+        )
+
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
     epub.write_epub(str(path), book)

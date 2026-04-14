@@ -78,8 +78,32 @@ def create_code_challenge(verifier: str) -> str:
 
 
 def extract_code(value: str) -> str | None:
+    if "accounts.pixiv.net/post-redirect" in value:
+        parsed = urllib.parse.urlparse(value)
+        query = urllib.parse.parse_qs(parsed.query)
+        nested = query.get("return_to", [None])[0]
+        if nested:
+            current = nested
+            seen: set[str] = set()
+            while current and current not in seen:
+                seen.add(current)
+                if "code=" in current:
+                    return extract_code(current)
+                decoded = urllib.parse.unquote(current)
+                if decoded == current:
+                    break
+                current = decoded
     if "code=" in value:
         parsed = urllib.parse.urlparse(value)
         query = urllib.parse.parse_qs(parsed.query)
         return query.get("code", [None])[0]
+    if "://" in value or value.startswith("/"):
+        return None
     return value or None
+
+
+def looks_like_intermediate_redirect(value: str) -> bool:
+    lowered = value.lower()
+    return (
+        "accounts.pixiv.net/post-redirect" in lowered or "/auth/pixiv/start" in lowered
+    )

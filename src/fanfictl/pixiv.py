@@ -108,6 +108,7 @@ class PixivClient:
             description=_normalize_description(body.get("description")),
             language=body.get("language"),
             content=content,
+            embedded_images=_extract_embedded_images(body),
         )
 
     def fetch_series_work(self, series_id: int, source_url: str) -> Work:
@@ -131,6 +132,7 @@ class PixivClient:
                     title=chapter_body.get("title") or f"Chapter {position}",
                     description=_normalize_description(chapter_body.get("description")),
                     content=content,
+                    embedded_images=_extract_embedded_images(chapter_body),
                 )
             )
 
@@ -216,6 +218,7 @@ class AuthenticatedPixivClient:
             description=_normalize_description(_attr(novel, "caption")),
             language=_attr(novel, "language"),
             content=content,
+            embedded_images=_extract_embedded_images(text_result, detail_result, novel),
         )
 
     def _fetch_series_with_api(
@@ -251,6 +254,7 @@ class AuthenticatedPixivClient:
                     title=_attr(novel, "title", default=f"Chapter {position}"),
                     description=_normalize_description(_attr(novel, "caption")),
                     content=content,
+                    embedded_images=_extract_embedded_images(text_result, novel),
                 )
             )
 
@@ -275,6 +279,7 @@ def _build_novel_work(
     description: str,
     language: str | None,
     content: str,
+    embedded_images: dict[str, str] | None = None,
 ) -> Work:
     chapter = _build_chapter(
         position=1,
@@ -282,6 +287,7 @@ def _build_novel_work(
         title=title,
         description=description,
         content=content,
+        embedded_images=embedded_images,
     )
     return Work(
         kind=WorkKind.NOVEL,
@@ -302,13 +308,18 @@ def _build_chapter(
     title: str,
     description: str,
     content: str,
+    embedded_images: dict[str, str] | None = None,
 ) -> Chapter:
     return Chapter(
         position=position,
         pixiv_novel_id=pixiv_novel_id,
         original_title=title,
         description=description,
-        source_markdown=normalize_pixiv_text_to_markdown(content, chapter_title=title),
+        source_markdown=normalize_pixiv_text_to_markdown(
+            content,
+            chapter_title=title,
+            embedded_images=embedded_images,
+        ),
     )
 
 
@@ -334,3 +345,23 @@ def _author_name(obj) -> str:
         _attr(user, "name", default=_attr(obj, "user_name", default="Unknown"))
         or "Unknown"
     )
+
+
+def _extract_embedded_images(*objects) -> dict[str, str]:
+    for obj in objects:
+        raw_images = _attr(
+            obj,
+            "textEmbeddedImages",
+            default=_attr(obj, "text_embedded_images", default=None),
+        )
+        if not isinstance(raw_images, dict) or not raw_images:
+            continue
+        images: dict[str, str] = {}
+        for image_id, raw in raw_images.items():
+            urls = _attr(raw, "urls", default={}) or {}
+            original_url = _attr(urls, "original") or _attr(urls, "1200x1200")
+            if original_url:
+                images[str(image_id)] = str(original_url)
+        if images:
+            return images
+    return {}

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
+import re
+from urllib.parse import urlparse
 from typing import Callable, Iterable
+
+import httpx
 
 from fanfictl.auth import UserRecord
 from fanfictl.config import Settings
@@ -151,6 +156,7 @@ def translate_url_to_outputs(
 
     save_checkpoint(work_root, checkpoint)
     save_metadata(work_root, work)
+    _localize_pixiv_assets(work, work_root)
 
     for chapter in work.chapters:
         chapter_root = work_root / "chapters"
@@ -210,3 +216,73 @@ def _load_existing_work(work_root: Path) -> Work | None:
     if not metadata_path.exists():
         return None
     return Work.model_validate(json.loads(metadata_path.read_text(encoding="utf-8")))
+
+
+def _localize_pixiv_assets(work: Work, work_root: Path) -> None:
+    replacements = _download_embedded_pixiv_images(work, work_root)
+    if not replacements:
+        return
+
+    for chapter in work.chapters:
+        chapter.source_markdown = _replace_asset_urls(
+            chapter.source_markdown, replacements
+        )
+        if chapter.translated_markdown:
+            chapter.translated_markdown = _replace_asset_urls(
+                chapter.translated_markdown, replacements
+            )
+
+
+def _download_embedded_pixiv_images(work: Work, work_root: Path) -> dict[str, str]:
+    image_urls = {
+        url
+        for chapter in work.chapters
+        for url in _extract_pixiv_image_urls(chapter.source_markdown)
+    }
+    if not image_urls:
+        return {}
+
+    assets_dir = work_root / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    replacements: dict[str, str] = {}
+
+    with httpx.Client(
+        timeout=30.0,
+        headers={
+            "Referer": "https://www.pixiv.net/",
+            "User-Agent": "Mozilla/5.0 Fableport/0.1.0",
+        },
+    ) as client:
+        for url in sorted(image_urls):
+            target = assets_dir / _asset_filename_for_url(url)
+            try:
+                if not target.exists():
+                    response = client.get(url)
+                    response.raise_for_status()
+                    target.write_bytes(response.content)
+                replacements[url] = target.relative_to(work_root).as_posix()
+            except Exception:  # noqa: BLE001
+                continue
+    return replacements
+
+
+def _extract_pixiv_image_urls(markdown: str) -> list[str]:
+    return [
+        match.group(1)
+        for match in re.finditer(
+            r"!\[[^\]]*\]\((https://i\.pximg\.net[^)]+)\)", markdown
+        )
+    ]
+
+
+def _replace_asset_urls(markdown: str, replacements: dict[str, str]) -> str:
+    for old, new in replacements.items():
+        markdown = markdown.replace(old, new)
+    return markdown
+
+
+def _asset_filename_for_url(url: str) -> str:
+    parsed = urlparse(url)
+    suffix = Path(parsed.path).suffix or ".bin"
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    return f"embedded-{digest}{suffix}"

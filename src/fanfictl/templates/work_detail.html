@@ -8,6 +8,10 @@
   {% endif %}
   <div class="actions-row">
     <a class="button" href="{{ entry.public_url_path }}">Open public reader</a>
+    <form action="/works/{{ entry.root_name }}/retranslate" method="post" style="display:inline-flex">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+      <button class="button" type="submit">Retranslate</button>
+    </form>
     {% for fmt, filename in entry.outputs.items() %}
       <a class="button button--ghost" href="/download/{{ entry.work.public_id }}/{{ fmt }}">{{ fmt|upper }}</a>
     {% endfor %}

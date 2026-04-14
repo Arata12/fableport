@@ -23,22 +23,32 @@ def main() -> int:
     login_parser.add_argument(
         "--no-browser", action="store_true", help="Do not auto-open the browser"
     )
+    login_parser.add_argument(
+        "--show-secrets",
+        action="store_true",
+        help="Print live tokens in full (unsafe; avoid in shared terminals/logs)",
+    )
 
     refresh_parser = subparsers.add_parser(
         "refresh", help="Exchange an existing refresh token"
     )
     refresh_parser.add_argument("refresh_token", help="Existing Pixiv refresh token")
+    refresh_parser.add_argument(
+        "--show-secrets",
+        action="store_true",
+        help="Print live tokens in full (unsafe; avoid in shared terminals/logs)",
+    )
 
     args = parser.parse_args()
     if args.command == "login":
-        return run_login(no_browser=args.no_browser)
+        return run_login(no_browser=args.no_browser, show_secrets=args.show_secrets)
     if args.command == "refresh":
-        return run_refresh(args.refresh_token)
+        return run_refresh(args.refresh_token, show_secrets=args.show_secrets)
     parser.print_help()
     return 1
 
 
-def run_login(*, no_browser: bool) -> int:
+def run_login(*, no_browser: bool, show_secrets: bool) -> int:
     verifier, _state, url = create_oauth_session()
 
     print("Open this URL and sign into Pixiv:")
@@ -59,29 +69,41 @@ def run_login(*, no_browser: bool) -> int:
         return 2
 
     payload = exchange_code_for_token(code=code, code_verifier=verifier)
-    print_token_result(payload)
+    print_token_result(payload, show_secrets=show_secrets)
     return 0
 
 
-def run_refresh(refresh_token: str) -> int:
+def run_refresh(refresh_token: str, show_secrets: bool) -> int:
     payload = refresh_access_token(refresh_token)
-    print_token_result(payload)
+    print_token_result(payload, show_secrets=show_secrets)
     return 0
 
 
-def print_token_result(payload: dict) -> None:
+def print_token_result(payload: dict, *, show_secrets: bool) -> None:
     print()
     print("Pixiv OAuth succeeded.")
     print()
     print("refresh_token:")
-    print(payload.get("refresh_token", ""))
-    print()
-    print("access_token:")
-    print(payload.get("access_token", ""))
+    refresh_token = payload.get("refresh_token", "")
+    print(refresh_token if show_secrets else mask_secret(refresh_token))
     print()
     print(
         "Use the refresh_token in Fableport Settings or in .env as PIXIV_REFRESH_TOKEN."
     )
+    if show_secrets:
+        print()
+        print("access_token:")
+        print(payload.get("access_token", ""))
+    else:
+        print("Use --show-secrets if you really need the raw tokens printed.")
+
+
+def mask_secret(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 12:
+        return "*" * len(value)
+    return f"{value[:8]}…{value[-4:]}"
 
 
 if __name__ == "__main__":

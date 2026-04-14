@@ -16,6 +16,7 @@ from fanfictl.storage import save_metadata, slugify
 MARKDOWN = MarkdownIt("commonmark", {"html": True, "linkify": True, "breaks": True})
 ALLOWED_TAGS = list(bleach.sanitizer.ALLOWED_TAGS) + [
     "br",
+    "img",
     "p",
     "h1",
     "h2",
@@ -26,7 +27,10 @@ ALLOWED_TAGS = list(bleach.sanitizer.ALLOWED_TAGS) + [
     "ruby",
     "rt",
 ]
-ALLOWED_ATTRIBUTES = {"a": ["href", "title", "rel", "target"]}
+ALLOWED_ATTRIBUTES = {
+    "a": ["href", "title", "rel", "target"],
+    "img": ["src", "alt", "title"],
+}
 
 
 @dataclass

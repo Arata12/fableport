@@ -15,6 +15,7 @@
       <p class="notice">You are using the default admin credentials. Change <code>ADMIN_USERNAME</code> and <code>ADMIN_PASSWORD</code> in your env later.</p>
     {% endif %}
     <form action="/submit" method="post" class="stack-20">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <label>
         <span>Pixiv URL</span>
         <input name="source_url" type="url" placeholder="https://www.pixiv.net/novel/show.php?id=27402134" required>
@@ -103,6 +104,10 @@
               <td class="actions-cell">
                 <a class="button button--ghost button--small" href="{{ entry.public_url_path }}">Reader</a>
                 <a class="button button--ghost button--small" href="/works/{{ entry.root_name }}">Admin</a>
+                <form action="/works/{{ entry.root_name }}/retranslate" method="post" style="display:inline-flex">
+                  <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+                  <button class="button button--ghost button--small" type="submit">Retranslate</button>
+                </form>
               </td>
             </tr>
           {% endfor %}
@@ -121,7 +126,7 @@
     {% if public_works %}
       <table class="table">
         <thead>
-          <tr><th>Title</th><th>Author</th><th>Type</th><th>Owner</th><th>Files</th><th>Actions</th></tr>
+          <tr><th>Title</th><th>Author</th><th>Type</th>{% if current_user.role == 'admin' %}<th>Owner</th>{% endif %}<th>Files</th><th>Actions</th></tr>
         </thead>
         <tbody>
           {% for entry in public_works %}
@@ -132,12 +137,16 @@
               </td>
               <td>{{ entry.work.author_name }}</td>
               <td>{{ entry.work.kind.value }}</td>
-              <td>{{ entry.work.owner_username or 'system' }}</td>
+              {% if current_user.role == 'admin' %}<td>{{ entry.work.owner_username or 'system' }}</td>{% endif %}
               <td class="small">{{ entry.outputs.keys()|join(', ') }}</td>
               <td class="actions-cell">
                 <a class="button button--ghost button--small" href="{{ entry.public_url_path }}">Reader</a>
                 {% if current_user.role == 'admin' %}
                   <a class="button button--ghost button--small" href="/works/{{ entry.root_name }}">Admin</a>
+                  <form action="/works/{{ entry.root_name }}/retranslate" method="post" style="display:inline-flex">
+                    <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+                    <button class="button button--ghost button--small" type="submit">Retranslate</button>
+                  </form>
                 {% endif %}
               </td>
             </tr>
@@ -154,6 +163,7 @@
     <p class="muted">Signed in as {{ current_user.username }}.</p>
     <h2 class="subhead">Change password</h2>
     <form action="/account/password" method="post" class="stack-16">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <label>
         <span>Current password</span>
         <input name="current_password" type="password" required>
@@ -181,6 +191,7 @@
               <div class="muted small">personal</div>
             </div>
             <form action="/keys/personal/{{ key.id }}/delete" method="post">
+              <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
               <button class="button button--ghost" type="submit">Remove</button>
             </form>
           </li>
@@ -191,6 +202,7 @@
     {% endif %}
     <h3 class="subhead">Add personal key</h3>
     <form action="/keys/personal" method="post" class="stack-16">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <label>
         <span>Gemini API key</span>
         <input name="api_key" type="password" placeholder="AIza..." required>
@@ -212,6 +224,7 @@
               <div class="muted small">personal refresh token</div>
             </div>
             <form action="/pixiv/personal/{{ token.id }}/delete" method="post">
+              <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
               <button class="button button--ghost" type="submit">Remove</button>
             </form>
           </li>
@@ -222,6 +235,7 @@
     {% endif %}
     <h3 class="subhead">Add personal Pixiv refresh token</h3>
     <form action="/pixiv/personal" method="post" class="stack-16">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <label>
         <span>Pixiv refresh token</span>
         <input name="refresh_token" type="password" placeholder="paste your Pixiv refresh token" required>
@@ -229,11 +243,13 @@
       <button class="button" type="submit">Add personal token</button>
     </form>
     <h3 class="subhead">Get personal token through Pixiv login</h3>
-    <form action="/pixiv/personal/oauth/start" method="post" class="stack-16">
+    <form action="/pixiv/personal/oauth/start" method="post" class="stack-16" target="_blank">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <button class="button button--ghost" type="submit">Open Pixiv login</button>
     </form>
     {% if pixiv_oauth_pending_scope == 'personal' %}
       <form action="/pixiv/oauth/complete" method="post" class="stack-16 top-gap-12">
+        <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
         <label>
           <span>Paste the callback URL or the <code>code</code> value from Pixiv</span>
           <input name="callback_input" type="text" placeholder="https://app-api.pixiv.net/...&code=..." required>
@@ -259,6 +275,7 @@
             </div>
             {% if key.source == 'global' %}
               <form action="/keys/global/{{ key.id }}/delete" method="post">
+                <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
                 <button class="button button--ghost" type="submit">Remove</button>
               </form>
             {% endif %}
@@ -270,6 +287,7 @@
     {% endif %}
     <h3 class="subhead">Add global fallback key</h3>
     <form action="/keys/global" method="post" class="stack-16">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <label>
         <span>Shared Gemini API key</span>
         <input name="api_key" type="password" placeholder="AIza..." required>
@@ -293,6 +311,7 @@
             </div>
             {% if token.source == 'global' %}
               <form action="/pixiv/global/{{ token.id }}/delete" method="post">
+                <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
                 <button class="button button--ghost" type="submit">Remove</button>
               </form>
             {% endif %}
@@ -304,6 +323,7 @@
     {% endif %}
     <h3 class="subhead">Add global Pixiv refresh token</h3>
     <form action="/pixiv/global" method="post" class="stack-16">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <label>
         <span>Shared Pixiv refresh token</span>
         <input name="refresh_token" type="password" placeholder="paste a shared Pixiv refresh token" required>
@@ -311,11 +331,13 @@
       <button class="button" type="submit">Add global token</button>
     </form>
     <h3 class="subhead">Get global token through Pixiv login</h3>
-    <form action="/pixiv/global/oauth/start" method="post" class="stack-16">
+    <form action="/pixiv/global/oauth/start" method="post" class="stack-16" target="_blank">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <button class="button button--ghost" type="submit">Open Pixiv login</button>
     </form>
     {% if pixiv_oauth_pending_scope == 'global' %}
       <form action="/pixiv/oauth/complete" method="post" class="stack-16 top-gap-12">
+        <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
         <label>
           <span>Paste the callback URL or the <code>code</code> value from Pixiv</span>
           <input name="callback_input" type="text" placeholder="https://app-api.pixiv.net/...&code=..." required>
@@ -331,6 +353,7 @@
       <p class="muted">Create users who can sign in and manage their own Gemini keys.</p>
     </div>
     <form action="/users" method="post" class="stack-20">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <div class="grid grid--3">
         <label>
           <span>Username</span>

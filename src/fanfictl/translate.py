@@ -12,16 +12,32 @@ from fanfictl.models import Checkpoint, CheckpointChapter, Work
 from fanfictl.quota import DailyQuotaExceeded, QuotaTracker
 
 
-TITLE_SYSTEM = "You translate Pixiv fanfiction titles into natural English. Return only the translated title."
+TITLE_SYSTEM = (
+    "You translate Pixiv fanfiction titles into natural English. Preserve meaning, tone, and emotional nuance, "
+    "but avoid stiff literal phrasing when it sounds unnatural in English. Return only the translated title."
+)
+
+TRANSLATION_STYLE_GUIDANCE = (
+    "Preserve the original meaning and emotional nuance. Maintain distinct character voices based only on the source text itself; "
+    "do not rely on outside canon knowledge and do not force exaggerated characterization when the source is neutral. "
+    "Avoid overly literal phrasing if it sounds unnatural in English. Lightly adapt culture-specific expressions when needed to preserve tone rather than wording. "
+    "Keep dialogue sounding like real spoken English. Preserve subtle ambiguity and subtext without over-explaining. "
+    "Keep the narration smooth and readable, like a professionally translated novel. "
+    "Do not add new content, interpretations, embellishment, or dramatization beyond the source."
+)
 
 DESCRIPTION_SYSTEM = (
-    "You translate fanfiction summaries into natural English. Preserve meaning and tone, but keep it concise and readable. "
+    "You translate fanfiction summaries into natural English. "
+    f"{TRANSLATION_STYLE_GUIDANCE} "
+    "Keep the result concise and readable. "
     'Use standard English double quotation marks (") for dialogue. Return only the translated summary.'
 )
 
 PROSE_SYSTEM = (
-    "You are translating fanfiction prose into natural English. Preserve all meaning, tone, markdown structure, scene breaks, and links. "
-    'Do not summarize, censor, or omit content. Use standard English double quotation marks (") for dialogue consistently. Return only the translated markdown.'
+    "You are translating Japanese fanfiction prose into natural, fluent English. "
+    f"{TRANSLATION_STYLE_GUIDANCE} "
+    "Preserve all meaning, markdown structure, scene breaks, headings, links, and inline formatting exactly. "
+    'Do not summarize, censor, omit, or simplify content. Use standard English double quotation marks (") for dialogue consistently. Return only the translated markdown.'
 )
 
 
