@@ -3,17 +3,24 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
     <title>{{ title }} · Fableport</title>
     <meta name="robots" content="noindex,nofollow,noarchive">
     {% if refresh %}<meta http-equiv="refresh" content="3">{% endif %}
     {% if asset_base_href %}<base href="{{ asset_base_href }}">{% endif %}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&family=Nunito+Sans:wght@400;600;700;800&display=swap">
     <link rel="stylesheet" href="/static/app.css">
+    <script src="/static/app.js" defer></script>
   </head>
   <body class="{% if public %}public{% endif %}">
+    <a class="skip-link" href="#main">Skip to content</a>
+    {% if public %}<div class="reader-progress" id="reader-progress" aria-hidden="true"></div>{% endif %}
     {% if public and current_user %}
     <header class="utilitybar">
       <div class="utilitybar__inner">
-        <a class="brand" href="/dashboard">Back to dashboard</a>
+        <a class="brand" href="/dashboard">&larr; Back to dashboard</a>
         {% if can_manage and entry %}
           <a href="/works/{{ entry.root_name }}">Manage work</a>
         {% endif %}
@@ -23,23 +30,27 @@
     {% if not public %}
     <header class="topbar">
       <div class="topbar__inner">
-        <a class="brand" href="/dashboard">Fableport</a>
-        <nav class="nav">
-          <a class="{% if active_tab == 'overview' %}is-active{% endif %}" href="/dashboard">Overview</a>
-          <a class="{% if active_tab == 'library' %}is-active{% endif %}" href="/dashboard/library">Library</a>
-          <a class="{% if active_tab == 'settings' %}is-active{% endif %}" href="/dashboard/settings">Settings</a>
+        <a class="brand" href="/dashboard"><span class="brand__mark" aria-hidden="true">F</span>Fableport</a>
+        {% if not active_tab %}
+        <nav class="nav" aria-label="Main">
+          <a href="/dashboard">Overview</a>
+          <a href="/dashboard/library">Library</a>
+          <a href="/dashboard/settings">Settings</a>
         </nav>
-        {% if current_user %}
-          <span class="muted small">{{ current_user.username }} · {{ current_user.role }}</span>
         {% endif %}
-        <form action="/logout" method="post">
+        <div class="topbar__user">
+        {% if current_user and login_enabled %}
+          <span class="user-chip"><span class="user-chip__avatar" aria-hidden="true">{{ current_user.username[:1] }}</span><span class="user-chip__name">{{ current_user.username }} · {{ current_user.role }}</span></span>
+        <form action="/logout" method="post" class="inline-form">
           <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
-          <button class="button button--ghost" type="submit">Log out</button>
+          <button class="button button--ghost button--small" type="submit">Log out</button>
         </form>
+        {% endif %}
+        </div>
       </div>
     </header>
     {% endif %}
-    <main class="page">
+    <main class="page" id="main">
       {% block content %}{% endblock %}
     </main>
   </body>

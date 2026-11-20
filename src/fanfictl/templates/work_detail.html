@@ -1,31 +1,54 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="panel panel--wide">
+{% set status = entry.work.translation_status %}
+<section class="panel panel--wide panel--hero">
+  <p class="eyebrow">{{ entry.work.kind.value }} · {{ status }}</p>
   <h1>{{ entry.work.translated_title or entry.work.original_title }}</h1>
-  <p class="muted">{{ entry.work.original_title }} · {{ entry.work.author_name }}</p>
+  <p class="muted">{{ entry.work.original_title }} · {{ entry.work.author_name }}{% if entry.work.target_language %} · {{ entry.work.target_language }}{% endif %}</p>
   {% if entry.work.translated_description or entry.work.description %}
     <p>{{ entry.work.translated_description or entry.work.description }}</p>
   {% endif %}
   <div class="actions-row">
-    <a class="button" href="{{ entry.public_url_path }}">Open public reader</a>
-    <form action="/works/{{ entry.root_name }}/retranslate" method="post" style="display:inline-flex">
+    {% if status != 'translated' %}
+      <form action="/works/{{ entry.root_name }}/translate" method="post" class="inline-form">
+        <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+        <input name="resume" type="hidden" value="1">
+        <button class="button" type="submit">{% if status == 'partial' %}Resume translation ({{ app_config.target_language }}){% else %}Translate ({{ app_config.target_language }}){% endif %}</button>
+      </form>
+    {% endif %}
+    <a class="button{% if status != 'translated' %} button--ghost{% endif %}" href="{{ entry.public_url_path }}">Open public reader</a>
+    <form action="/works/{{ entry.root_name }}/retranslate" method="post" class="inline-form">
       <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
-      <button class="button" type="submit">Retranslate</button>
+      <button class="button button--ghost" type="submit">Retranslate</button>
+    </form>
+    <form action="/works/{{ entry.root_name }}/retranslate" method="post" class="inline-form">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+      <input name="refresh_source" type="hidden" value="1">
+      <button class="button button--ghost" type="submit">Re-fetch from Pixiv &amp; retranslate</button>
     </form>
     {% for fmt, filename in entry.outputs.items() %}
       <a class="button button--ghost" href="/download/{{ entry.work.public_id }}/{{ fmt }}">{{ fmt|upper }}</a>
     {% endfor %}
+    <form action="/works/{{ entry.root_name }}/delete" method="post" class="inline-form" data-confirm="Delete this work and all its downloaded chapters and exports?">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+      <button class="button button--danger-ghost" type="submit">Delete</button>
+    </form>
   </div>
-  <div class="meta-grid">
-    <div><span class="muted">Kind</span><strong>{{ entry.work.kind.value }}</strong></div>
-    <div><span class="muted">Pixiv ID</span><strong>{{ entry.work.pixiv_id }}</strong></div>
-    <div><span class="muted">Public ID</span><strong>{{ entry.work.public_id }}</strong></div>
+</section>
+<section class="panel panel--wide">
+  <div class="meta-grid meta-grid--flush">
+    <div><span class="muted">Status</span><strong><span class="badge badge--{{ status }}">{{ status }}</span></strong></div>
+    <div><span class="muted">Chapters translated</span><strong>{{ entry.work.translated_chapter_count }} / {{ entry.work.chapters|length }}</strong></div>
+    <div><span class="muted">Pixiv ID / Public ID</span><strong>{{ entry.work.pixiv_id }} · {{ entry.work.public_id }}</strong></div>
   </div>
-  {% if entry.work.kind.value == 'series' %}
+  {% if entry.work.chapters %}
     <h2>Chapters</h2>
-    <ol class="chapter-list">
+    <ol class="chapter-list work-chapters">
       {% for chapter in entry.work.chapters %}
-        <li>{{ chapter.position }}. {{ chapter.translated_title or chapter.original_title }}</li>
+        <li>
+          <span>{{ chapter.position }}. {{ chapter.translated_title or chapter.original_title }}</span>
+          <span class="chapter-status badge badge--{{ 'translated' if chapter.is_translated else 'untranslated' }}">{{ 'translated' if chapter.is_translated else 'pending' }}</span>
+        </li>
       {% endfor %}
     </ol>
   {% endif %}

@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fableport"
-version = "0.1.0"
-description = "Translate public Pixiv fanfiction into English with a hosted reader"
+version = "0.2.0"
+description = "Import and translate Pixiv fanfiction with local, vLLM, Ollama, or Google Colab inference"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "AGPL-3.0-or-later"}
@@ -16,7 +16,6 @@ dependencies = [
   "bleach>=6.1.0",
   "ebooklib>=0.18",
   "fastapi>=0.115.0",
-  "google-genai>=1.30.0",
   "httpx>=0.27.0",
   "itsdangerous>=2.2.0",
   "jinja2>=3.1.4",
@@ -27,6 +26,11 @@ dependencies = [
   "python-dotenv>=1.0.1",
   "typer>=0.12.3",
   "uvicorn>=0.30.0",
+]
+
+[project.optional-dependencies]
+colab = [
+  "google-colab-cli>=0.8.0",
 ]
 
 [project.scripts]

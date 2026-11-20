@@ -1,18 +1,38 @@
 {% extends "base.html" %}
 {% block content %}
+{% set total = job.total_chapters or 0 %}
+{% set done = job.current_chapter or 0 %}
+<section class="panel panel--wide panel--hero job-hero">
+  <p class="eyebrow">{% if job.job_type == 'import' %}Import job{% else %}Translation job{% if job.target_language %} · {{ job.target_language }}{% endif %}{% endif %}</p>
+  <h1>{{ job.work_title or ('Job ' ~ job.id) }}</h1>
+  <p><span class="badge badge--{{ job.status }}">{{ job.status }}</span></p>
+  <p>{{ job.message }}</p>
+  {% if total %}
+    <div class="job-progress">
+      <div class="job-progress__label"><span>Chapters</span><span>{{ done }} / {{ total }}</span></div>
+      <progress class="progress--lg{% if job.status == 'completed' %} progress--ok{% elif job.status == 'failed' %} progress--warn{% endif %}" max="{{ total }}" value="{{ done }}" aria-label="Job progress">{{ done }} / {{ total }}</progress>
+    </div>
+  {% endif %}
+  {% if job.error_message %}<p class="notice notice--error top-gap-12">{{ job.error_message }}</p>{% endif %}
+</section>
 <section class="panel panel--wide">
-  <h1>Job {{ job.id }}</h1>
-  <div class="meta-grid">
+  <div class="meta-grid meta-grid--flush">
     <div><span class="muted">Status</span><strong>{{ job.status }}</strong></div>
     <div><span class="muted">Step</span><strong>{{ job.current_step }}</strong></div>
     <div><span class="muted">Progress</span><strong>{{ job.current_chapter }} / {{ job.total_chapters }}</strong></div>
   </div>
-  <p>{{ job.message }}</p>
-  {% if job.error_message %}<p class="notice notice--error">{{ job.error_message }}</p>{% endif %}
   {% if work_entry %}
     <div class="actions-row">
-      <a class="button" href="/works/{{ work_entry.root_name }}">Open work</a>
+      {% if not work_entry.work.is_translated %}
+        <form action="/works/{{ work_entry.root_name }}/translate" method="post" class="inline-form">
+          <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+          <input name="resume" type="hidden" value="1">
+          <button class="button" type="submit">Translate now</button>
+        </form>
+      {% endif %}
+      <a class="button{% if not work_entry.work.is_translated %} button--ghost{% endif %}" href="/works/{{ work_entry.root_name }}">Open work</a>
       <a class="button button--ghost" href="{{ work_entry.public_url_path }}">Open reader</a>
+      <a class="button button--ghost" href="/dashboard/library">Library</a>
     </div>
   {% endif %}
 </section>

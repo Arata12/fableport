@@ -1,22 +1,23 @@
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
-from fanfictl.auth import UserRecord, UserStore
+from fanfictl.auth import UserRecord, UserStore, secret_id_for, utc_now
 from fanfictl.config import Settings
 
 
-def key_id_for(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+def mask_secret(value: str, prefix_len: int = 6) -> str:
+    if len(value) <= prefix_len + 4:
+        return "*" * len(value)
+    return f"{value[:prefix_len]}…{value[-4:]}"
+
+
+key_id_for = secret_id_for
 
 
 def mask_key(value: str) -> str:
-    if len(value) <= 10:
-        return "*" * len(value)
-    return f"{value[:6]}…{value[-4:]}"
+    return mask_secret(value, 6)
 
 
 @dataclass
@@ -25,200 +26,164 @@ class RuntimeAPIKey:
     key: str
     source: str
     is_default: bool
-    owner_user_id: int | None = None
-    owner_username: str | None = None
 
 
 @dataclass
-class APIKeySummary:
+class SecretSummary:
     id: str
     source: str
     masked: str
     is_default: bool
-    owner_user_id: int | None
-    owner_username: str | None
     created_at: str | None
 
 
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+APIKeySummary = SecretSummary
 
 
-class APIKeyStore:
+class _SecretStore:
+    """Shared storage of user/global/env secrets, keyed by a hash of the value."""
+
+    table: str
+    value_column: str
+    hash_column: str
+    mask_prefix_len: int
+    empty_error: str
+
     def __init__(self, settings: Settings, user_store: UserStore | None = None) -> None:
         self.settings = settings
         self.user_store = user_store or UserStore(settings)
 
-    def runtime_keys_for_user(self, user: UserRecord | None) -> list[RuntimeAPIKey]:
-        keys: list[RuntimeAPIKey] = []
+    def _env_value(self) -> str:
+        raise NotImplementedError
+
+    def _runtime_entries(
+        self, user: UserRecord | None
+    ) -> list[tuple[str, str, str, bool]]:
+        """Return (id, value, source, is_default), personal -> global -> env."""
+        entries: list[tuple[str, str, str, bool]] = []
         seen: set[str] = set()
+
+        def add(value: str, source: str, is_default: bool) -> None:
+            secret_id = secret_id_for(value)
+            if secret_id not in seen:
+                seen.add(secret_id)
+                entries.append((secret_id, value, source, is_default))
 
         if user:
             for row in self._fetch_rows(owner_user_id=user.id, scope="user"):
-                key_id = key_id_for(row["key_value"])
-                if key_id in seen:
-                    continue
-                keys.append(
-                    RuntimeAPIKey(
-                        id=key_id,
-                        key=row["key_value"],
-                        source="personal",
-                        is_default=False,
-                        owner_user_id=user.id,
-                        owner_username=user.username,
-                    )
-                )
-                seen.add(key_id)
-
+                add(row[self.value_column], "personal", False)
         for row in self._fetch_rows(owner_user_id=None, scope="global"):
-            key_id = key_id_for(row["key_value"])
-            if key_id in seen:
-                continue
-            keys.append(
-                RuntimeAPIKey(
-                    id=key_id,
-                    key=row["key_value"],
-                    source="global",
-                    is_default=False,
-                    owner_user_id=None,
-                    owner_username=None,
-                )
-            )
-            seen.add(key_id)
+            add(row[self.value_column], "global", False)
+        env_value = self._env_value()
+        if env_value:
+            add(env_value, "system", True)
+        return entries
 
-        if self.settings.gemini_api_key:
-            key_id = key_id_for(self.settings.gemini_api_key)
-            if key_id not in seen:
-                keys.append(
-                    RuntimeAPIKey(
-                        id=key_id,
-                        key=self.settings.gemini_api_key,
-                        source="system",
-                        is_default=True,
-                        owner_user_id=None,
-                        owner_username=None,
-                    )
-                )
-        return keys
-
-    def list_personal_keys(self, user: UserRecord) -> list[APIKeySummary]:
+    def _summaries(self, owner_user_id: int | None, scope: str, source: str):
         return [
-            APIKeySummary(
-                id=key_id_for(row["key_value"]),
-                source="personal",
-                masked=mask_key(row["key_value"]),
+            SecretSummary(
+                id=secret_id_for(row[self.value_column]),
+                source=source,
+                masked=mask_secret(row[self.value_column], self.mask_prefix_len),
                 is_default=False,
-                owner_user_id=user.id,
-                owner_username=user.username,
                 created_at=row["created_at"],
             )
-            for row in self._fetch_rows(owner_user_id=user.id, scope="user")
+            for row in self._fetch_rows(owner_user_id=owner_user_id, scope=scope)
         ]
 
-    def list_global_keys(self) -> list[APIKeySummary]:
-        summaries = [
-            APIKeySummary(
-                id=key_id_for(row["key_value"]),
-                source="global",
-                masked=mask_key(row["key_value"]),
-                is_default=False,
-                owner_user_id=None,
-                owner_username=None,
-                created_at=row["created_at"],
-            )
-            for row in self._fetch_rows(owner_user_id=None, scope="global")
-        ]
-        if self.settings.gemini_api_key:
+    def _personal_summaries(self, user: UserRecord) -> list[SecretSummary]:
+        return self._summaries(user.id, "user", "personal")
+
+    def _global_summaries(self) -> list[SecretSummary]:
+        summaries = self._summaries(None, "global", "global")
+        env_value = self._env_value()
+        if env_value:
             summaries.append(
-                APIKeySummary(
-                    id=key_id_for(self.settings.gemini_api_key),
+                SecretSummary(
+                    id=secret_id_for(env_value),
                     source="system",
-                    masked=mask_key(self.settings.gemini_api_key),
+                    masked=mask_secret(env_value, self.mask_prefix_len),
                     is_default=True,
-                    owner_user_id=None,
-                    owner_username=None,
                     created_at=None,
                 )
             )
         return summaries
 
-    def add_user_key(self, user: UserRecord, raw_key: str) -> None:
-        self._add_key(raw_key, owner_user_id=user.id, scope="user")
-
-    def add_global_key(self, raw_key: str) -> None:
-        self._add_key(raw_key, owner_user_id=None, scope="global")
-
-    def remove_user_key(self, user: UserRecord, key_id: str) -> None:
+    def _remove(self, secret_id: str, *, owner_user_id: int | None, scope: str) -> None:
+        owner_sql = "owner_user_id IS NULL" if owner_user_id is None else "owner_user_id = ?"
+        owner_params = () if owner_user_id is None else (owner_user_id,)
         with self.user_store._connect() as conn:
-            self._ensure_hash_column(conn)
             conn.execute(
-                "DELETE FROM api_keys WHERE owner_user_id = ? AND scope = 'user' AND key_value_hash = ?",
-                (user.id, key_id),
+                f"DELETE FROM {self.table} WHERE {owner_sql} AND scope = ? AND {self.hash_column} = ?",
+                (*owner_params, scope, secret_id),
             )
             conn.commit()
 
-    def remove_global_key(self, key_id: str) -> None:
-        with self.user_store._connect() as conn:
-            self._ensure_hash_column(conn)
-            conn.execute(
-                "DELETE FROM api_keys WHERE owner_user_id IS NULL AND scope = 'global' AND key_value_hash = ?",
-                (key_id,),
-            )
-            conn.commit()
-
-    def _add_key(self, raw_key: str, *, owner_user_id: int | None, scope: str) -> None:
-        value = raw_key.strip()
+    def _add(self, raw: str, *, owner_user_id: int | None, scope: str) -> None:
+        value = raw.strip()
         if not value:
-            raise ValueError("API key cannot be empty")
-        key_id = key_id_for(value)
+            raise ValueError(self.empty_error)
+        secret_id = secret_id_for(value)
 
-        if self.settings.gemini_api_key and key_id == key_id_for(
-            self.settings.gemini_api_key
-        ):
+        env_value = self._env_value()
+        if env_value and secret_id == secret_id_for(env_value):
             return
 
         with self.user_store._connect() as conn:
-            self._ensure_hash_column(conn)
             existing = conn.execute(
-                "SELECT id FROM api_keys WHERE key_value_hash = ?",
-                (key_id,),
+                f"SELECT id FROM {self.table} WHERE {self.hash_column} = ?",
+                (secret_id,),
             ).fetchone()
             if existing:
                 return
             conn.execute(
-                "INSERT INTO api_keys (owner_user_id, scope, key_value, created_at, key_value_hash) VALUES (?, ?, ?, ?, ?)",
-                (owner_user_id, scope, value, _utc_now(), key_id),
+                f"INSERT INTO {self.table} (owner_user_id, scope, {self.value_column}, created_at, {self.hash_column}) VALUES (?, ?, ?, ?, ?)",
+                (owner_user_id, scope, value, utc_now(), secret_id),
             )
             conn.commit()
 
     def _fetch_rows(
         self, *, owner_user_id: int | None, scope: str
     ) -> list[sqlite3.Row]:
+        owner_sql = "owner_user_id IS NULL" if owner_user_id is None else "owner_user_id = ?"
+        params = (scope,) if owner_user_id is None else (owner_user_id, scope)
         with self.user_store._connect() as conn:
-            self._ensure_hash_column(conn)
-            if owner_user_id is None:
-                rows = conn.execute(
-                    "SELECT * FROM api_keys WHERE owner_user_id IS NULL AND scope = ? ORDER BY id ASC",
-                    (scope,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM api_keys WHERE owner_user_id = ? AND scope = ? ORDER BY id ASC",
-                    (owner_user_id, scope),
-                ).fetchall()
-        return rows
+            return conn.execute(
+                f"SELECT * FROM {self.table} WHERE {owner_sql} AND scope = ? ORDER BY id ASC",
+                params,
+            ).fetchall()
 
-    @staticmethod
-    def _ensure_hash_column(conn: sqlite3.Connection) -> None:
-        columns = [
-            row[1] for row in conn.execute("PRAGMA table_info(api_keys)").fetchall()
+
+class APIKeyStore(_SecretStore):
+    table = "api_keys"
+    value_column = "key_value"
+    hash_column = "key_value_hash"
+    mask_prefix_len = 6
+    empty_error = "API key cannot be empty"
+
+    def _env_value(self) -> str:
+        return self.settings.ollama_api_key or ""
+
+    def runtime_keys_for_user(self, user: UserRecord | None) -> list[RuntimeAPIKey]:
+        return [
+            RuntimeAPIKey(id=i, key=v, source=s, is_default=d)
+            for i, v, s, d in self._runtime_entries(user)
         ]
-        if "key_value_hash" not in columns:
-            conn.execute("ALTER TABLE api_keys ADD COLUMN key_value_hash TEXT")
-            rows = conn.execute("SELECT id, key_value FROM api_keys").fetchall()
-            for row in rows:
-                conn.execute(
-                    "UPDATE api_keys SET key_value_hash = ? WHERE id = ?",
-                    (key_id_for(row["key_value"]), row["id"]),
-                )
-            conn.commit()
+
+    def list_personal_keys(self, user: UserRecord) -> list[SecretSummary]:
+        return self._personal_summaries(user)
+
+    def list_global_keys(self) -> list[SecretSummary]:
+        return self._global_summaries()
+
+    def add_user_key(self, user: UserRecord, raw_key: str) -> None:
+        self._add(raw_key, owner_user_id=user.id, scope="user")
+
+    def add_global_key(self, raw_key: str) -> None:
+        self._add(raw_key, owner_user_id=None, scope="global")
+
+    def remove_user_key(self, user: UserRecord, key_id: str) -> None:
+        self._remove(key_id, owner_user_id=user.id, scope="user")
+
+    def remove_global_key(self, key_id: str) -> None:
+        self._remove(key_id, owner_user_id=None, scope="global")

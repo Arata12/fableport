@@ -67,7 +67,7 @@ docker compose --profile tools run --rm cli info "https://www.pixiv.net/novel/sh
 docker compose --profile tools run --rm cli translate "https://www.pixiv.net/novel/show.php?id=27402134"
 ```
 
-## Gemini quota panel
+## Usage panel
 
 The dashboard shows:
 
@@ -78,9 +78,9 @@ The dashboard shows:
 
 The totals reflect all active keys combined.
 
-## Gemini keys
+## Ollama API keys
 
-The dashboard supports personal and global Gemini keys.
+The dashboard supports personal and global Ollama API keys.
 
 Behavior:
 
@@ -135,12 +135,10 @@ Then:
 
 ## Limits
 
-Current defaults:
+Ollama Cloud limits usage per plan and answers HTTP 429 when the limit is hit;
+that key then pauses for a minute and the next key is used. Optional local caps
+per key (default `0` = no cap):
 
-- `15` requests per minute per key
-- `1500` requests per day per key
-
-These can be changed with:
-
-- `GEMINI_RPM_LIMIT`
-- `GEMINI_RPD_LIMIT`
+- `OLLAMA_RPM_LIMIT`
+- `OLLAMA_RPD_LIMIT`
+- `TRANSLATION_CONCURRENCY` (chapters translated in parallel, default 3)

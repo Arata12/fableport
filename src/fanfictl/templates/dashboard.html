@@ -1,187 +1,616 @@
 {% extends "base.html" %}
+{% from "icons.html" import icon %}
+{% macro work_card(entry, show_owner, can_admin) %}
+{% set status = entry.work.translation_status %}
+<article class="work-card">
+  <div class="work-card__cover">
+    <div class="work-card__badges">
+      <span class="badge badge--kind">{{ entry.work.kind.value }}</span>
+      {% if status == 'partial' %}
+        <span class="badge badge--partial">{{ entry.work.translated_chapter_count }}/{{ entry.work.chapters|length }}</span>
+      {% elif status == 'untranslated' %}
+        <span class="badge badge--untranslated">Untranslated</span>
+      {% endif %}
+    </div>
+    <span class="work-card__glyph" aria-hidden="true">{{ (entry.work.translated_title or entry.work.original_title)[:1] }}</span>
+  </div>
+  <div class="work-card__body">
+    <h3 class="work-card__title"><a class="table-link" href="{{ entry.public_url_path }}">{{ entry.work.translated_title or entry.work.original_title }}</a></h3>
+    <p class="work-card__orig">{{ entry.work.original_title }}</p>
+    <p class="work-card__meta">
+      <span>by <strong>{{ entry.work.author_name }}</strong></span>
+      <span><strong>{{ entry.work.chapters|length }}</strong> chapter{{ '' if entry.work.chapters|length == 1 else 's' }}</span>
+      {% if entry.work.target_language %}<span><strong>{{ entry.work.target_language }}</strong></span>{% endif %}
+      {% if show_owner %}<span>owner <strong>{{ entry.work.owner_username or 'system' }}</strong></span>{% endif %}
+    </p>
+    {% if entry.outputs %}
+      <div class="chips">
+        {% for fmt in entry.outputs.keys() %}<span class="chip">{{ fmt }}</span>{% endfor %}
+      </div>
+    {% endif %}
+  </div>
+  <div class="work-card__actions">
+    {% if can_admin and status != 'translated' %}
+      <form action="/works/{{ entry.root_name }}/translate" method="post" class="inline-form">
+        <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+        <input name="resume" type="hidden" value="1">
+        <button class="button button--small button--primary-link" type="submit">{% if status == 'partial' %}Resume{% else %}Translate{% endif %}</button>
+      </form>
+      <a class="button button--ghost button--small" href="{{ entry.public_url_path }}">Reader</a>
+      <a class="button button--ghost button--small" href="/works/{{ entry.root_name }}">Admin</a>
+      <form action="/works/{{ entry.root_name }}/delete" method="post" class="inline-form" data-confirm="Delete '{{ entry.work.translated_title or entry.work.original_title }}' and all its files?">
+        <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+        <button class="button button--danger-ghost button--small" type="submit">Delete</button>
+      </form>
+    {% else %}
+      <a class="button button--small button--primary-link" href="{{ entry.public_url_path }}">Reader</a>
+      {% if can_admin %}
+        <a class="button button--ghost button--small" href="/works/{{ entry.root_name }}">Admin</a>
+        <form action="/works/{{ entry.root_name }}/retranslate" method="post" class="inline-form">
+          <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+          <button class="button button--ghost button--small" type="submit">Retranslate</button>
+        </form>
+        <form action="/works/{{ entry.root_name }}/delete" method="post" class="inline-form" data-confirm="Delete '{{ entry.work.translated_title or entry.work.original_title }}' and all its files?">
+          <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+          <button class="button button--danger-ghost button--small" type="submit">Delete</button>
+        </form>
+      {% endif %}
+    {% endif %}
+  </div>
+</article>
+{% endmacro %}
 {% block content %}
-<div class="layout">
+<div class="dash-head">
+  <p class="eyebrow">{% if login_enabled %}Welcome back, {{ current_user.username }}{% else %}Local mode{% endif %}</p>
+  <h1>{% if active_tab == 'library' %}Your library{% elif active_tab == 'settings' %}Settings{% else %}Dashboard{% endif %}</h1>
+</div>
+<nav class="tabs" aria-label="Dashboard sections">
+  <a class="tab{% if active_tab == 'overview' %} is-active{% endif %}" href="/dashboard"{% if active_tab == 'overview' %} aria-current="page"{% endif %}>{{ icon('home') }}<span class="tab__text">Overview</span></a>
+  <a class="tab{% if active_tab == 'library' %} is-active{% endif %}" href="/dashboard/library"{% if active_tab == 'library' %} aria-current="page"{% endif %}>{{ icon('library') }}<span class="tab__text">Library{% if pending_my_count %} ({{ pending_my_count }}){% endif %}</span></a>
+  <a class="tab{% if active_tab == 'settings' %} is-active{% endif %}" href="/dashboard/settings"{% if active_tab == 'settings' %} aria-current="page"{% endif %}>{{ icon('settings') }}<span class="tab__text">Settings</span></a>
+</nav>
+<div class="{% if active_tab == 'settings' %}settings-grid{% else %}layout{% endif %}">
   {% if form_error %}
     <section class="panel panel--wide">
       <p class="notice notice--error">{{ form_error }}</p>
     </section>
   {% endif %}
+  {% if form_notice %}
+    <section class="panel panel--wide">
+      <p class="notice notice--ok">{{ form_notice }}</p>
+    </section>
+  {% endif %}
 
   {% if active_tab == 'overview' %}
-  <section class="panel panel--wide">
-    <h1>New import</h1>
-    <p class="muted">Paste a public Pixiv novel or series URL. The work is translated into English, stored in your library, and exposed through a public reader link.</p>
+  <section class="panel panel--wide panel--hero">
+    <h2 class="panel__title"><span class="icon-bubble">{{ icon('spark') }}</span>New import</h2>
+    <p class="lead">Paste a Pixiv novel or series URL — or several lines at once. Works are imported without spending GPU credits and translated into <strong>{{ app_config.target_language }}</strong> whenever you're ready.</p>
     {% if using_default_admin and current_user.role == 'admin' %}
-      <p class="notice">You are using the default admin credentials. Change <code>ADMIN_USERNAME</code> and <code>ADMIN_PASSWORD</code> in your env later.</p>
+      <p class="notice">You are still using the default admin password. <a href="/dashboard/settings">Change it in Settings</a>.</p>
     {% endif %}
-    <form action="/submit" method="post" class="stack-20">
+    <form action="/submit" method="post" class="stack-16">
       <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
-      <label>
-        <span>Pixiv URL</span>
-        <input name="source_url" type="url" placeholder="https://www.pixiv.net/novel/show.php?id=27402134" required>
-      </label>
-      <div class="grid grid--2">
-        <label>
-          <span>Chapter limit</span>
-          <input name="chapter_limit" type="number" min="1" placeholder="Optional">
-        </label>
-        <label class="checkbox-row">
-          <input name="resume" type="checkbox" value="1">
-          <span>Resume if a checkpoint exists</span>
-        </label>
+      <div class="import-composer">
+        <textarea name="source_urls" rows="1" data-autogrow aria-label="Pixiv URLs" placeholder="https://www.pixiv.net/novel/show.php?id=27402134  (or paste multiple lines)" required></textarea>
+        <button class="button button--big" type="submit" name="action" value="import">Import to library</button>
       </div>
-      <fieldset>
-        <legend>Exports</legend>
-        <div class="checkbox-grid">
-          <label class="checkbox-row"><input name="export_md" type="checkbox" value="1" checked><span>Markdown</span></label>
-          <label class="checkbox-row"><input name="export_txt" type="checkbox" value="1" checked><span>TXT</span></label>
-          <label class="checkbox-row"><input name="export_html" type="checkbox" value="1" checked><span>HTML</span></label>
-          <label class="checkbox-row"><input name="export_epub" type="checkbox" value="1" checked><span>EPUB</span></label>
+      <div class="import-meta-bar">
+        <p class="import-meta-bar__hint">One URL per line for batch import.</p>
+        <div class="import-meta-bar__actions">
+          <button class="button button--soft button--small" type="submit" name="action" value="translate">Import &amp; translate now</button>
         </div>
-      </fieldset>
-      <button class="button" type="submit">Queue translation</button>
+      </div>
+      <details class="options-disclosure">
+        <summary>Options · chapter limit &amp; exports</summary>
+        <div class="options-tray stack-16">
+          <div class="grid grid--2">
+            <label>
+              <span>Chapter limit</span>
+              <input name="chapter_limit" type="number" min="1" placeholder="Optional">
+            </label>
+            <label class="checkbox-row">
+              <input name="resume" type="checkbox" value="1">
+              <span>Resume if a checkpoint exists</span>
+            </label>
+          </div>
+          <fieldset>
+            <legend>Exports</legend>
+            <div class="checkbox-grid">
+              <label class="checkbox-row"><input name="export_md" type="checkbox" value="1" checked><span>Markdown</span></label>
+              <label class="checkbox-row"><input name="export_txt" type="checkbox" value="1" checked><span>TXT</span></label>
+              <label class="checkbox-row"><input name="export_html" type="checkbox" value="1" checked><span>HTML</span></label>
+              <label class="checkbox-row"><input name="export_epub" type="checkbox" value="1" checked><span>EPUB</span></label>
+            </div>
+          </fieldset>
+        </div>
+      </details>
     </form>
   </section>
 
-  <section class="panel">
-    <h2>Gemma quota</h2>
-    <div class="quota-grid">
-      <div>
-        <span class="muted">This minute</span>
-        <strong>{{ quota.minute_used }} / {{ quota.minute_limit }}</strong>
-      </div>
-      <div>
-        <span class="muted">Today</span>
-        <strong>{{ quota.daily_used }} / {{ quota.daily_limit }}</strong>
-      </div>
-      <div>
-        <span class="muted">Reset</span>
-        <strong>{{ quota.reset_at }}</strong>
+  {% if pending_my_count %}
+  <section class="panel panel--wide">
+    <div class="pending-bar">
+      <p>{{ pending_my_count }} work{{ '' if pending_my_count == 1 else 's' }} waiting to be translated into {{ app_config.target_language }}.</p>
+      <div class="form-actions">
+        <a class="button button--ghost button--small" href="/dashboard/library">Review library</a>
+        <form action="/works/translate-all" method="post" class="inline-form">
+          <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+          <input name="scope" type="hidden" value="mine">
+          <button class="button button--small" type="submit">Translate all pending ({{ pending_my_count }})</button>
+        </form>
       </div>
     </div>
+  </section>
+  {% endif %}
+
+  {% if current_user.role == 'admin' and (app_config.provider_backend == 'colab' or colab_status.state != 'stopped') %}
+  <section class="panel panel--wide">
+    <div class="section-head">
+      <div class="section-head__copy">
+        <h2 class="panel__title"><span class="icon-bubble icon-bubble--ok">{{ icon('cpu') }}</span>Google Colab GPU</h2>
+        <p class="muted">{{ colab_status.detail }} · <strong>{{ colab_status.gpu }}</strong> · <strong>{{ colab_status.engine }}</strong> · <code>{{ colab_status.model }}</code></p>
+      </div>
+      <span class="badge badge--{{ colab_status.state }}">{{ colab_status.state }}</span>
+    </div>
+    {% if colab_status.usage and colab_status.usage.balance %}
+      <p class="small muted">Balance: <strong>{{ colab_status.usage.balance }}</strong>{% if colab_status.usage.usage_rate %} · Rate: <strong>{{ colab_status.usage.usage_rate }}</strong>{% endif %}</p>
+    {% endif %}
+    <div class="form-actions">
+      {% if colab_status.state in ['stopped', 'error'] %}
+        <form action="/colab/start" method="post" class="inline-form">
+          <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+          <input name="return_to" type="hidden" value="/dashboard">
+          <button class="button button--small" type="submit">Start Colab GPU</button>
+        </form>
+      {% else %}
+        <form action="/colab/stop" method="post" class="inline-form">
+          <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+          <input name="return_to" type="hidden" value="/dashboard">
+          <button class="button button--ghost button--small" type="submit">Stop Colab GPU</button>
+        </form>
+      {% endif %}
+      <form action="/colab/usage" method="post" class="inline-form">
+        <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+        <input name="return_to" type="hidden" value="/dashboard">
+        <button class="button button--ghost button--small" type="submit">Refresh balance</button>
+      </form>
+      <a class="button button--ghost button--small" href="/dashboard/settings">Settings</a>
+    </div>
+    {% if colab_status.logs %}
+      <details class="disclosure"{% if colab_status.state in ['starting', 'bootstrapping', 'tunneling', 'error'] %} open{% endif %}>
+        <summary>Runtime logs ({{ colab_status.logs|length }})</summary>
+        <pre class="colab-logs">{{ colab_status.logs|join('\n') }}</pre>
+      </details>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2 class="panel__title"><span class="icon-bubble icon-bubble--2">{{ icon('gauge') }}</span>Usage</h2>
+    <p class="muted small">
+      Target: <strong>{{ app_config.target_language }}</strong> ·
+      {% if app_config.provider_backend == 'colab' %}
+        <strong>Colab {{ app_config.colab_gpu }}</strong> ({{ app_config.colab_engine }} · <code>{{ app_config.effective_colab_model }}</code>)
+      {% elif app_config.provider_backend == 'local' %}
+        <strong>Local ({{ 'OpenAI' if app_config.api_mode == 'openai' else 'Ollama' }})</strong> · <code>{{ app_config.ollama_model }}</code>
+      {% else %}
+        <strong>Ollama Cloud</strong> · <code>{{ app_config.ollama_model }}</code>
+      {% endif %}
+    </p>
+    <div class="quota-grid">
+      <div class="meter">
+        <div class="meter__row"><span>This minute</span><strong>{{ quota.minute_used }}{% if quota.minute_limit %} / {{ quota.minute_limit }}{% endif %}</strong></div>
+        {% if quota.minute_limit %}<progress max="{{ quota.minute_limit }}" value="{{ quota.minute_used }}" class="{% if quota.minute_limit and quota.minute_used >= quota.minute_limit %}progress--warn{% endif %}" aria-label="Requests used this minute">{{ quota.minute_used }} / {{ quota.minute_limit }}</progress>{% endif %}
+      </div>
+      <div class="meter">
+        <div class="meter__row"><span>Today</span><strong>{{ quota.daily_used }}{% if quota.daily_limit %} / {{ quota.daily_limit }}{% endif %}</strong></div>
+        {% if quota.daily_limit %}<progress max="{{ quota.daily_limit }}" value="{{ quota.daily_used }}" class="{% if quota.daily_limit and quota.daily_used >= quota.daily_limit %}progress--warn{% endif %}" aria-label="Requests used today">{{ quota.daily_used }} / {{ quota.daily_limit }}</progress>{% endif %}
+      </div>
+      <div class="quota-reset"><span>Reset</span><strong>{{ quota.reset_at }}</strong></div>
+    </div>
     {% if quota.last_error %}
-      <p class="notice">Last quota event: {{ quota.last_error }}</p>
+      <p class="notice top-gap-12">Last quota event: {{ quota.last_error }}</p>
     {% endif %}
   </section>
 
   <section class="panel">
-    <h2>Recent jobs</h2>
+    <h2 class="panel__title"><span class="icon-bubble icon-bubble--ok">{{ icon('list') }}</span>Recent jobs</h2>
     {% if jobs %}
       <ul class="item-list">
         {% for job in jobs %}
           <li>
-            <a href="/jobs/{{ job.id }}">{{ job.id }}</a>
-            <span class="badge badge--{{ job.status }}">{{ job.status }}</span>
-            <p class="muted small">{{ job.message }}</p>
+            <a class="job-item" href="/jobs/{{ job.id }}">
+              <span class="job-item__top">
+                <span class="job-item__id">{{ job.work_title or job.id }}</span>
+                <span class="badge badge--{{ job.status }}">{{ job.status }}</span>
+              </span>
+              <span class="job-item__msg">{{ 'Import' if job.job_type == 'import' else 'Translate' }} · {{ job.message }}</span>
+              {% if job.status == 'running' and job.total_chapters %}
+                <progress max="{{ job.total_chapters }}" value="{{ job.current_chapter }}" aria-label="Job progress">{{ job.current_chapter }} / {{ job.total_chapters }}</progress>
+              {% endif %}
+            </a>
           </li>
         {% endfor %}
       </ul>
     {% else %}
-      <p class="muted">No jobs yet.</p>
+      <div class="empty">
+        <div class="empty__icon">{{ icon('inbox') }}</div>
+        <p>No jobs yet.</p>
+      </div>
     {% endif %}
   </section>
   {% elif active_tab == 'library' %}
   <section class="panel panel--wide">
     <div class="section-head">
-      <h1>My imports</h1>
-      <p class="muted">Works you imported or own.</p>
+      <div class="section-head__copy">
+        <h2 class="panel__title"><span class="icon-bubble">{{ icon('user') }}</span>My imports</h2>
+        <p class="muted">Works you imported or own. Target language: <strong>{{ app_config.target_language }}</strong>.</p>
+      </div>
+      {% if pending_my_count %}
+        <form action="/works/translate-all" method="post" class="inline-form">
+          <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+          <input name="scope" type="hidden" value="mine">
+          <button class="button" type="submit">Translate all pending ({{ pending_my_count }})</button>
+        </form>
+      {% endif %}
     </div>
     {% if my_works %}
-      <table class="table">
-        <thead>
-          <tr><th>Title</th><th>Author</th><th>Type</th><th>Files</th><th>Actions</th></tr>
-        </thead>
-        <tbody>
-          {% for entry in my_works %}
-            <tr>
-              <td>
-                <a class="table-link" href="{{ entry.public_url_path }}"><strong>{{ entry.work.translated_title or entry.work.original_title }}</strong></a>
-                <div class="muted small">{{ entry.work.original_title }}</div>
-              </td>
-              <td>{{ entry.work.author_name }}</td>
-              <td>{{ entry.work.kind.value }}</td>
-              <td class="small">{{ entry.outputs.keys()|join(', ') }}</td>
-              <td class="actions-cell">
-                <a class="button button--ghost button--small" href="{{ entry.public_url_path }}">Reader</a>
-                <a class="button button--ghost button--small" href="/works/{{ entry.root_name }}">Admin</a>
-                <form action="/works/{{ entry.root_name }}/retranslate" method="post" style="display:inline-flex">
-                  <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
-                  <button class="button button--ghost button--small" type="submit">Retranslate</button>
-                </form>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      <div class="work-grid">
+        {% for entry in my_works %}
+          {{ work_card(entry, false, true) }}
+        {% endfor %}
+      </div>
     {% else %}
-      <p class="muted">You have not imported anything yet.</p>
+      <div class="empty">
+        <div class="empty__icon">{{ icon('book') }}</div>
+        <p>You have not imported anything yet.</p>
+      </div>
     {% endif %}
   </section>
 
   <section class="panel panel--wide">
     <div class="section-head">
-      <h2>Public library</h2>
-      <p class="muted">Reader links use {{ base_url }}.</p>
+      <div class="section-head__copy">
+        <h2 class="panel__title"><span class="icon-bubble icon-bubble--2">{{ icon('globe') }}</span>Public library</h2>
+        <p class="muted">Reader links use {{ base_url }}.</p>
+      </div>
+      {% if current_user.role == 'admin' and pending_all_count > pending_my_count %}
+        <form action="/works/translate-all" method="post" class="inline-form">
+          <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+          <input name="scope" type="hidden" value="all">
+          <button class="button button--ghost button--small" type="submit">Translate all library pending ({{ pending_all_count }})</button>
+        </form>
+      {% endif %}
     </div>
     {% if public_works %}
-      <table class="table">
-        <thead>
-          <tr><th>Title</th><th>Author</th><th>Type</th>{% if current_user.role == 'admin' %}<th>Owner</th>{% endif %}<th>Files</th><th>Actions</th></tr>
-        </thead>
-        <tbody>
-          {% for entry in public_works %}
-            <tr>
-              <td>
-                <a class="table-link" href="{{ entry.public_url_path }}"><strong>{{ entry.work.translated_title or entry.work.original_title }}</strong></a>
-                <div class="muted small">{{ entry.work.original_title }}</div>
-              </td>
-              <td>{{ entry.work.author_name }}</td>
-              <td>{{ entry.work.kind.value }}</td>
-              {% if current_user.role == 'admin' %}<td>{{ entry.work.owner_username or 'system' }}</td>{% endif %}
-              <td class="small">{{ entry.outputs.keys()|join(', ') }}</td>
-              <td class="actions-cell">
-                <a class="button button--ghost button--small" href="{{ entry.public_url_path }}">Reader</a>
-                {% if current_user.role == 'admin' %}
-                  <a class="button button--ghost button--small" href="/works/{{ entry.root_name }}">Admin</a>
-                  <form action="/works/{{ entry.root_name }}/retranslate" method="post" style="display:inline-flex">
-                    <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
-                    <button class="button button--ghost button--small" type="submit">Retranslate</button>
-                  </form>
-                {% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      <div class="work-grid">
+        {% for entry in public_works %}
+          {{ work_card(entry, current_user.role == 'admin', current_user.role == 'admin') }}
+        {% endfor %}
+      </div>
     {% else %}
-      <p class="muted">No public works yet.</p>
+      <div class="empty">
+        <div class="empty__icon">{{ icon('globe') }}</div>
+        <p>No public works yet.</p>
+      </div>
     {% endif %}
   </section>
   {% elif active_tab == 'settings' %}
-  <section class="panel">
-    <h1>Account</h1>
+  {% if current_user.role == 'admin' %}
+  {% set backend = app_config.provider_backend %}
+  <section class="panel panel--wide" id="translation">
+    <div class="section-head">
+      <div class="section-head__copy">
+        <h2 class="panel__title"><span class="icon-bubble">{{ icon('settings') }}</span>Translation engine</h2>
+        <p class="muted">Pick where translation runs, target language, and context size. Changes apply immediately.</p>
+      </div>
+      {% if backend == 'colab' %}
+        <span class="badge badge--{{ colab_status.state }}">Colab · {{ colab_status.state }}</span>
+      {% endif %}
+    </div>
+    <form action="/settings/translation" method="post" class="stack-20">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+      <input name="colab_form_present" type="hidden" value="1">
+      <input name="return_to" type="hidden" value="/dashboard/settings">
+
+      <div class="grid grid--3">
+        <label>
+          <span>Target language</span>
+          <input name="target_language" type="text" list="target-languages" value="{{ app_config.target_language }}" placeholder="English" required>
+          <datalist id="target-languages">
+            <option value="English">
+            <option value="Spanish">
+            <option value="French">
+            <option value="Portuguese">
+            <option value="German">
+            <option value="Italian">
+            <option value="Chinese">
+            <option value="Korean">
+          </datalist>
+        </label>
+        <label>
+          <span>Parallel chapters</span>
+          <input name="translation_concurrency" type="number" min="1" max="16" value="{{ app_config.translation_concurrency }}" required>
+        </label>
+        <label>
+          <span>Context window</span>
+          <select name="context_length">
+            <option value="0"{% if app_config.context_length == 0 %} selected{% endif %}>Auto (by GPU &amp; parallel chapters)</option>
+            <option value="16384"{% if app_config.context_length == 16384 %} selected{% endif %}>16,384 tokens (16k)</option>
+            <option value="32768"{% if app_config.context_length == 32768 %} selected{% endif %}>32,768 tokens (32k)</option>
+            <option value="65536"{% if app_config.context_length == 65536 %} selected{% endif %}>65,536 tokens (64k)</option>
+            <option value="131072"{% if app_config.context_length == 131072 %} selected{% endif %}>131,072 tokens (128k)</option>
+            <option value="262144"{% if app_config.context_length == 262144 %} selected{% endif %}>262,144 tokens (256k · FP8/Q8 KV)</option>
+          </select>
+        </label>
+      </div>
+
+      <div>
+        <span style="display:block;font-weight:700;font-size:14px;margin-bottom:8px;">Provider</span>
+        <div class="provider-picker">
+          <label class="provider-option">
+            <input type="radio" name="provider_backend" value="colab"{% if backend == 'colab' %} checked{% endif %}>
+            <span class="provider-option__text">
+              <span class="provider-option__title">Google Colab GPU</span>
+              <span class="provider-option__desc">Auto-starts vLLM or Ollama on your Colab GPU credits and stops when done</span>
+            </span>
+          </label>
+          <label class="provider-option">
+            <input type="radio" name="provider_backend" value="local"{% if backend == 'local' %} checked{% endif %}>
+            <span class="provider-option__text">
+              <span class="provider-option__title">Local / Remote server</span>
+              <span class="provider-option__desc">Ollama, vLLM, llama.cpp, LM Studio, or any OpenAI-compatible URL</span>
+            </span>
+          </label>
+          <label class="provider-option">
+            <input type="radio" name="provider_backend" value="ollama_cloud"{% if backend == 'ollama_cloud' %} checked{% endif %}>
+            <span class="provider-option__text">
+              <span class="provider-option__title">Ollama Cloud</span>
+              <span class="provider-option__desc">Hosted models on ollama.com using your API keys below</span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Provider panel: Google Colab GPU -->
+      <div class="provider-panel stack-16" data-provider-panel="colab" id="colab"{% if backend != 'colab' %} hidden{% endif %}>
+        {% if not colab_status.cli_available %}
+          <p class="notice"><code>colab</code> or <code>ssh</code> is not available in this environment. Run via Docker to use managed Colab sessions.</p>
+        {% endif %}
+
+        <div class="meta-grid meta-grid--flush">
+          <div>
+            <span class="muted">Account</span>
+            <strong>{% if colab_status.authenticated %}{{ colab_status.auth_hint }}{% else %}Not connected{% endif %}</strong>
+          </div>
+          <div>
+            <span class="muted">Runtime</span>
+            <strong>{{ colab_status.detail }}</strong>
+          </div>
+          <div>
+            <span class="muted">Compute balance</span>
+            <strong>{% if colab_status.usage and colab_status.usage.balance %}{{ colab_status.usage.balance }}{% if colab_status.usage.usage_rate %} ({{ colab_status.usage.usage_rate }}){% endif %}{% else %}Not checked{% endif %}</strong>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          {% if colab_status.authenticated %}
+            {% if colab_status.state in ['stopped', 'error'] %}
+              <button class="button button--small" type="submit" formaction="/colab/start" formnovalidate>Start Colab GPU</button>
+            {% else %}
+              <button class="button button--ghost button--small" type="submit" formaction="/colab/stop" formnovalidate>Stop Colab GPU</button>
+            {% endif %}
+            <button class="button button--ghost button--small" type="submit" formaction="/colab/usage" formnovalidate>Refresh balance</button>
+            <button class="button button--ghost button--small" type="submit" formaction="/colab/disconnect" formnovalidate>Disconnect</button>
+          {% else %}
+            <button class="button button--small" type="submit" formaction="/colab/oauth/start" formtarget="_blank" formnovalidate>Step 1: Open Google Colab login</button>
+          {% endif %}
+        </div>
+
+        {% if not colab_status.authenticated %}
+          <div class="grid grid--2">
+            <label>
+              <span>Step 2: Paste the code shown by Google</span>
+              <input name="auth_code" type="text" placeholder="4/0A...">
+            </label>
+            <div style="align-self:end;">
+              <button class="button button--small" type="submit" formaction="/colab/oauth/complete" formnovalidate>Finish Google login</button>
+            </div>
+          </div>
+          <details class="disclosure">
+            <summary>Or paste existing ADC JSON</summary>
+            <div class="stack-16">
+              <p class="muted small">Generate locally with: <code>gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory</code></p>
+              <label>
+                <span>application_default_credentials.json</span>
+                <textarea name="adc_json" class="mono" rows="3" placeholder='{"type": "authorized_user", "client_id": "...", "client_secret": "...", "refresh_token": "..."}'></textarea>
+              </label>
+              <div>
+                <button class="button button--ghost button--small" type="submit" formaction="/colab/adc" formnovalidate>Save ADC JSON</button>
+              </div>
+            </div>
+          </details>
+        {% endif %}
+
+        <div class="grid grid--3">
+          <label>
+            <span>GPU</span>
+            <select name="colab_gpu">
+              {% for gpu in colab_gpus %}
+                <option value="{{ gpu }}"{% if app_config.colab_gpu == gpu %} selected{% endif %}>{{ gpu }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            <span>Engine</span>
+            <select name="colab_engine">
+              <option value="vllm"{% if app_config.colab_engine == 'vllm' %} selected{% endif %}>vLLM (fastest batch)</option>
+              <option value="ollama"{% if app_config.colab_engine == 'ollama' %} selected{% endif %}>Ollama (plug &amp; play)</option>
+            </select>
+          </label>
+          <label>
+            <span>Model</span>
+            <input name="colab_model" type="text" list="colab-models" value="{{ app_config.colab_model or app_config.effective_colab_model }}" placeholder="Qwen/Qwen2.5-14B-Instruct-AWQ">
+            <datalist id="colab-models">
+              <option value="gemma4:26b">
+              <option value="gemma4:31b">
+              <option value="Qwen/Qwen2.5-14B-Instruct-AWQ">
+              <option value="Qwen/Qwen2.5-32B-Instruct-AWQ">
+              <option value="google/gemma-4-26B-A4B-it">
+              <option value="google/gemma-4-31b-it">
+              <option value="qwen2.5:14b">
+            </datalist>
+          </label>
+        </div>
+
+        <div class="toggle-list">
+          <label class="checkbox-row">
+            <input name="colab_auto_start" type="checkbox" value="1"{% if app_config.colab_auto_start %} checked{% endif %}>
+            <span>Auto-start when translating</span>
+          </label>
+          <label class="checkbox-row">
+            <input name="colab_auto_stop" type="checkbox" value="1"{% if app_config.colab_auto_stop %} checked{% endif %}>
+            <span>Auto-stop when queue finishes</span>
+          </label>
+        </div>
+
+        <details class="disclosure"{% if app_config.colab_extra_args or app_config.colab_hf_token or app_config.colab_high_mem or app_config.colab_idle_stop_minutes %} open{% endif %}>
+          <summary>Advanced Colab options (HF token, High RAM, idle timer, custom flags)</summary>
+          <div class="stack-16">
+            <div class="grid grid--3">
+              <label>
+                <span>HF token <small class="muted">({% if app_config.colab_hf_token %}saved{% else %}gated models{% endif %})</small></span>
+                <input name="colab_hf_token" type="password" placeholder="{% if app_config.colab_hf_token %}leave blank to keep{% else %}hf_... (optional){% endif %}">
+              </label>
+              <label>
+                <span>Session name</span>
+                <input name="colab_session_name" type="text" value="{{ app_config.colab_session_name }}">
+              </label>
+              <label>
+                <span>Idle auto-stop (min)</span>
+                <input name="colab_idle_stop_minutes" type="number" min="0" max="120" value="{{ app_config.colab_idle_stop_minutes }}">
+              </label>
+            </div>
+            <label>
+              <span>Custom vLLM flags <small class="muted">(optional — leave blank for automatic GPU defaults)</small></span>
+              <input name="colab_extra_args" type="text" value="{{ app_config.colab_extra_args }}" placeholder="Automatic per GPU & context window">
+            </label>
+            <div class="toggle-list">
+              <label class="checkbox-row">
+                <input name="colab_high_mem" type="checkbox" value="1"{% if app_config.colab_high_mem %} checked{% endif %}>
+                <span>High RAM (T4 / A100)</span>
+              </label>
+              {% if app_config.colab_hf_token %}
+              <label class="checkbox-row">
+                <input name="clear_hf_token" type="checkbox" value="1">
+                <span>Clear saved HF token</span>
+              </label>
+              {% endif %}
+            </div>
+          </div>
+        </details>
+
+        {% if colab_status.logs %}
+          <details class="disclosure"{% if colab_status.state in ['starting', 'bootstrapping', 'tunneling', 'error'] %} open{% endif %}>
+            <summary>Runtime logs ({{ colab_status.logs|length }})</summary>
+            <pre class="colab-logs">{{ colab_status.logs|join('\n') }}</pre>
+          </details>
+        {% endif %}
+      </div>
+
+      <!-- Provider panel: Local / Remote server -->
+      <div class="provider-panel stack-16" data-provider-panel="local"{% if backend != 'local' %} hidden{% endif %}>
+        <div class="preset-row">
+          <span class="preset-row__label">Quick fill:</span>
+          <button class="button button--ghost button--small" type="button" data-engine-preset data-api-mode="ollama" data-host="http://host.docker.internal:11434" data-model="gemma4:31b">Ollama local</button>
+          <button class="button button--ghost button--small" type="button" data-engine-preset data-api-mode="openai" data-host="http://host.docker.internal:8001" data-model="Qwen/Qwen2.5-14B-Instruct-AWQ">vLLM local</button>
+        </div>
+        <div class="grid grid--3">
+          <label>
+            <span>API mode</span>
+            <select name="api_mode">
+              <option value="ollama"{% if app_config.api_mode == 'ollama' %} selected{% endif %}>Ollama (/api/chat)</option>
+              <option value="openai"{% if app_config.api_mode == 'openai' %} selected{% endif %}>OpenAI-compatible (/v1)</option>
+            </select>
+          </label>
+          <label class="grid__span-2">
+            <span>Host / Base URL</span>
+            <input name="ollama_host" type="url" value="{{ app_config.ollama_host if backend == 'local' else 'http://host.docker.internal:11434' }}" placeholder="http://host.docker.internal:11434">
+          </label>
+          <label class="grid__span-2">
+            <span>Model</span>
+            <input name="ollama_model" type="text" value="{{ app_config.ollama_model }}" placeholder="gemma4:31b">
+          </label>
+          <div style="align-self:end;">
+            <button class="button button--ghost" type="submit" formaction="/settings/translation/test" formnovalidate>Test connection</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Provider panel: Ollama Cloud -->
+      <div class="provider-panel stack-16" data-provider-panel="ollama_cloud"{% if backend != 'ollama_cloud' %} hidden{% endif %}>
+        <div class="grid grid--3">
+          <label class="grid__span-2">
+            <span>Model on ollama.com</span>
+            <input name="cloud_model" type="text" value="{{ app_config.ollama_model }}" placeholder="gemma4:31b">
+          </label>
+          <div style="align-self:end;">
+            <button class="button button--ghost" type="submit" formaction="/settings/translation/test" formnovalidate>Test connection</button>
+          </div>
+        </div>
+        <details class="disclosure"{% if app_config.rpm_limit or app_config.rpd_limit %} open{% endif %}>
+          <summary>Rate limits per API key (optional, 0 = no limit)</summary>
+          <div class="grid grid--2">
+            <label>
+              <span>Requests / minute</span>
+              <input name="rpm_limit" type="number" min="0" value="{{ app_config.rpm_limit }}">
+            </label>
+            <label>
+              <span>Requests / day</span>
+              <input name="rpd_limit" type="number" min="0" value="{{ app_config.rpd_limit }}">
+            </label>
+          </div>
+        </details>
+      </div>
+
+      <div class="form-actions">
+        <button class="button" type="submit">Save settings</button>
+      </div>
+    </form>
+  </section>
+  {% endif %}
+
+  <p class="group-label">Keys &amp; Tokens</p>
+
+  {% if login_enabled %}
+  <section class="panel panel--wide">
+    <h2 class="panel__title"><span class="icon-bubble">{{ icon('user') }}</span>Account</h2>
     <p class="muted">Signed in as {{ current_user.username }}.</p>
     <h2 class="subhead">Change password</h2>
     <form action="/account/password" method="post" class="stack-16">
       <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
-      <label>
-        <span>Current password</span>
-        <input name="current_password" type="password" required>
-      </label>
-      <label>
-        <span>New password</span>
-        <input name="new_password" type="password" required>
-      </label>
-      <label>
-        <span>Confirm new password</span>
-        <input name="confirm_password" type="password" required>
-      </label>
+      <div class="grid grid--3">
+        <label>
+          <span>Current password</span>
+          <input name="current_password" type="password" required>
+        </label>
+        <label>
+          <span>New password</span>
+          <input name="new_password" type="password" required>
+        </label>
+        <label>
+          <span>Confirm new password</span>
+          <input name="confirm_password" type="password" required>
+        </label>
+      </div>
       <button class="button" type="submit">Update password</button>
     </form>
   </section>
+  {% endif %}
 
   <section class="panel">
-    <h2>Personal API keys</h2>
+    <h2 class="panel__title"><span class="icon-bubble icon-bubble--2">{{ icon('key') }}</span>Personal API keys</h2>
+    <p class="muted small">Required for Ollama Cloud; optional for local or remote servers.</p>
     {% if personal_keys %}
       <ul class="key-list">
         {% for key in personal_keys %}
@@ -192,29 +621,28 @@
             </div>
             <form action="/keys/personal/{{ key.id }}/delete" method="post">
               <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
-              <button class="button button--ghost" type="submit">Remove</button>
+              <button class="button button--ghost button--small" type="submit">Remove</button>
             </form>
           </li>
         {% endfor %}
       </ul>
     {% else %}
-      <p class="muted">No personal keys yet.</p>
+      <div class="empty empty--inline"><div class="empty__icon">{{ icon('key') }}</div><p>No personal keys yet.</p></div>
     {% endif %}
     <h3 class="subhead">Add personal key</h3>
     <form action="/keys/personal" method="post" class="stack-16">
       <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <label>
-        <span>Gemini API key</span>
-        <input name="api_key" type="password" placeholder="AIza..." required>
+        <span>API key</span>
+        <input name="api_key" type="password" placeholder="paste your API key" required>
       </label>
       <button class="button" type="submit">Add personal key</button>
     </form>
   </section>
 
   <section class="panel">
-    <h2>Personal Pixiv token</h2>
-    <p class="muted">Used first for your own imports when a Pixiv work requires login.</p>
-    <p class="muted small">You can still use the bundled helper locally, but you can also complete the login flow directly from this page.</p>
+    <h2 class="panel__title"><span class="icon-bubble icon-bubble--ok">{{ icon('key') }}</span>Personal Pixiv token</h2>
+    <p class="muted small">Only needed for login-required / R-18 Pixiv works.</p>
     {% if personal_pixiv_tokens %}
       <ul class="key-list">
         {% for token in personal_pixiv_tokens %}
@@ -225,46 +653,46 @@
             </div>
             <form action="/pixiv/personal/{{ token.id }}/delete" method="post">
               <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
-              <button class="button button--ghost" type="submit">Remove</button>
+              <button class="button button--ghost button--small" type="submit">Remove</button>
             </form>
           </li>
         {% endfor %}
       </ul>
     {% else %}
-      <p class="muted">No personal Pixiv token configured.</p>
+      <div class="empty empty--inline"><div class="empty__icon">{{ icon('key') }}</div><p>No personal Pixiv token configured.</p></div>
     {% endif %}
-    <h3 class="subhead">Add personal Pixiv refresh token</h3>
-    <form action="/pixiv/personal" method="post" class="stack-16">
+    <h3 class="subhead">Connect via Pixiv login</h3>
+    <form action="/pixiv/personal/oauth/start" method="post" target="_blank">
+      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
+      <button class="button button--ghost button--small" type="submit">Step 1: Open Pixiv login</button>
+    </form>
+    <p class="step-hint">In the new Pixiv tab, press <strong>F12 → Network</strong>, check <strong>Preserve log</strong>, filter by <code>callback?</code> (or open <strong>Console</strong>), then sign in. Copy the <code>callback?...code=...</code> URL or <code>pixiv://account/login?code=...</code> line and paste it below immediately (codes expire fast).</p>
+    <form action="/pixiv/oauth/complete" method="post" class="stack-16 top-gap-12">
       <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <label>
-        <span>Pixiv refresh token</span>
-        <input name="refresh_token" type="password" placeholder="paste your Pixiv refresh token" required>
+        <span>Step 2: Paste callback URL, <code>pixiv://...</code> line, or <code>code</code></span>
+        <input name="callback_input" type="text" placeholder="https://app-api.pixiv.net/...?code=... or pixiv://account/login?code=..." required>
       </label>
-      <button class="button" type="submit">Add personal token</button>
+      <button class="button button--small" type="submit">Finish Pixiv login</button>
     </form>
-    <h3 class="subhead">Get personal token through Pixiv login</h3>
-    <form action="/pixiv/personal/oauth/start" method="post" class="stack-16" target="_blank">
-      <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
-      <button class="button button--ghost" type="submit">Open Pixiv login</button>
-    </form>
-    {% if pixiv_oauth_pending_scope == 'personal' %}
-      <form action="/pixiv/oauth/complete" method="post" class="stack-16 top-gap-12">
+    <details class="disclosure top-gap-12">
+      <summary>Or paste an existing refresh token</summary>
+      <form action="/pixiv/personal" method="post" class="stack-16">
         <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
         <label>
-          <span>Paste the callback URL or the <code>code</code> value from Pixiv</span>
-          <input name="callback_input" type="text" placeholder="https://app-api.pixiv.net/...&code=..." required>
+          <span>Pixiv refresh token</span>
+          <input name="refresh_token" type="password" placeholder="paste your Pixiv refresh token" required>
         </label>
-        <button class="button" type="submit">Finish personal Pixiv login</button>
+        <button class="button button--ghost button--small" type="submit">Add personal token</button>
       </form>
-    {% endif %}
+    </details>
   </section>
 
-  {% if current_user.role == 'admin' %}
-  <section class="panel panel--wide">
-    <div class="section-head">
-      <h2>Global fallback keys</h2>
-      <p class="muted">Shared keys used only after personal keys are exhausted.</p>
-    </div>
+  {% if current_user.role == 'admin' and login_enabled %}
+  <p class="group-label">Shared &amp; Users</p>
+  <section class="panel">
+    <h2 class="panel__title"><span class="icon-bubble icon-bubble--2">{{ icon('globe') }}</span>Global fallback keys</h2>
+    <p class="muted small">Shared keys used only after personal keys are exhausted.</p>
     {% if global_keys %}
       <ul class="key-list">
         {% for key in global_keys %}
@@ -276,31 +704,29 @@
             {% if key.source == 'global' %}
               <form action="/keys/global/{{ key.id }}/delete" method="post">
                 <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
-                <button class="button button--ghost" type="submit">Remove</button>
+                <button class="button button--ghost button--small" type="submit">Remove</button>
               </form>
             {% endif %}
           </li>
         {% endfor %}
       </ul>
     {% else %}
-      <p class="muted">No global fallback keys configured.</p>
+      <div class="empty empty--inline"><div class="empty__icon">{{ icon('key') }}</div><p>No global fallback keys configured.</p></div>
     {% endif %}
     <h3 class="subhead">Add global fallback key</h3>
     <form action="/keys/global" method="post" class="stack-16">
       <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
       <label>
-        <span>Shared Gemini API key</span>
-        <input name="api_key" type="password" placeholder="AIza..." required>
+        <span>Shared API key</span>
+        <input name="api_key" type="password" placeholder="paste your shared API key" required>
       </label>
       <button class="button" type="submit">Add global key</button>
     </form>
   </section>
 
-  <section class="panel panel--wide">
-    <div class="section-head">
-      <h2>Global Pixiv token</h2>
-      <p class="muted">Default authenticated fallback for login-required Pixiv works.</p>
-    </div>
+  <section class="panel">
+    <h2 class="panel__title"><span class="icon-bubble icon-bubble--ok">{{ icon('globe') }}</span>Global Pixiv token</h2>
+    <p class="muted small">Default authenticated fallback for login-required Pixiv works.</p>
     {% if global_pixiv_tokens %}
       <ul class="key-list">
         {% for token in global_pixiv_tokens %}
@@ -312,14 +738,14 @@
             {% if token.source == 'global' %}
               <form action="/pixiv/global/{{ token.id }}/delete" method="post">
                 <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
-                <button class="button button--ghost" type="submit">Remove</button>
+                <button class="button button--ghost button--small" type="submit">Remove</button>
               </form>
             {% endif %}
           </li>
         {% endfor %}
       </ul>
     {% else %}
-      <p class="muted">No global Pixiv token configured.</p>
+      <div class="empty empty--inline"><div class="empty__icon">{{ icon('key') }}</div><p>No global Pixiv token configured.</p></div>
     {% endif %}
     <h3 class="subhead">Add global Pixiv refresh token</h3>
     <form action="/pixiv/global" method="post" class="stack-16">
@@ -330,10 +756,9 @@
       </label>
       <button class="button" type="submit">Add global token</button>
     </form>
-    <h3 class="subhead">Get global token through Pixiv login</h3>
-    <form action="/pixiv/global/oauth/start" method="post" class="stack-16" target="_blank">
+    <form action="/pixiv/global/oauth/start" method="post" class="top-gap-12" target="_blank">
       <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
-      <button class="button button--ghost" type="submit">Open Pixiv login</button>
+      <button class="button button--ghost button--small" type="submit">Open Pixiv login</button>
     </form>
     {% if pixiv_oauth_pending_scope == 'global' %}
       <form action="/pixiv/oauth/complete" method="post" class="stack-16 top-gap-12">
@@ -349,8 +774,10 @@
 
   <section class="panel panel--wide">
     <div class="section-head">
-      <h2>Users</h2>
-      <p class="muted">Create users who can sign in and manage their own Gemini keys.</p>
+      <div class="section-head__copy">
+        <h2 class="panel__title"><span class="icon-bubble">{{ icon('users') }}</span>Users</h2>
+        <p class="muted">Create users who can sign in and manage their own API keys.</p>
+      </div>
     </div>
     <form action="/users" method="post" class="stack-20">
       <input name="csrf_token" type="hidden" value="{{ csrf_token }}">
@@ -373,20 +800,20 @@
       </div>
       <button class="button" type="submit">Create user</button>
     </form>
-    <table class="table table--spaced">
+    <div class="table-wrap"><table class="table table--spaced table--stack">
       <thead>
         <tr><th>Username</th><th>Role</th><th>Created</th></tr>
       </thead>
       <tbody>
         {% for user in users %}
           <tr>
-            <td>{{ user.username }}</td>
-            <td>{{ user.role }}</td>
-            <td class="small">{{ user.created_at }}</td>
+            <td data-label="Username"><strong>{{ user.username }}</strong></td>
+            <td data-label="Role"><span class="badge badge--kind">{{ user.role }}</span></td>
+            <td class="small" data-label="Created">{{ user.created_at }}</td>
           </tr>
         {% endfor %}
       </tbody>
-    </table>
+    </table></div>
   </section>
   {% endif %}
   {% endif %}

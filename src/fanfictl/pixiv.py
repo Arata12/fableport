@@ -12,7 +12,6 @@ from fanfictl.models import Chapter, ParsedPixivUrl, Work, WorkKind
 from fanfictl.pixiv_tokens import RuntimePixivToken
 
 
-NOVEL_ID_RE = re.compile(r"/novel/show\.php\?id=(\d+)")
 SERIES_ID_RE = re.compile(r"/novel/series/(\d+)")
 
 
@@ -21,26 +20,17 @@ class PixivAccessError(RuntimeError):
 
 
 def parse_pixiv_url(raw_url: str) -> ParsedPixivUrl:
+    """Accept a bare novel id, a novel URL (show.php?id=) or a series URL."""
+    raw_url = raw_url.strip()
     if raw_url.isdigit():
-        return ParsedPixivUrl(
-            kind="novel",
-            pixiv_id=int(raw_url),
-            url=f"https://www.pixiv.net/novel/show.php?id={raw_url}",
-        )
+        return _novel(int(raw_url))
 
     parsed = urlparse(raw_url)
-    path = parsed.path
     query = parse_qs(parsed.query)
+    if "show.php" in parsed.path and query.get("id", [""])[0].isdigit():
+        return _novel(int(query["id"][0]))
 
-    if "show.php" in path and "id" in query:
-        novel_id = int(query["id"][0])
-        return ParsedPixivUrl(
-            kind="novel",
-            pixiv_id=novel_id,
-            url=f"https://www.pixiv.net/novel/show.php?id={novel_id}",
-        )
-
-    match = SERIES_ID_RE.search(path)
+    match = SERIES_ID_RE.search(parsed.path)
     if match:
         series_id = int(match.group(1))
         return ParsedPixivUrl(
@@ -49,16 +39,15 @@ def parse_pixiv_url(raw_url: str) -> ParsedPixivUrl:
             url=f"https://www.pixiv.net/novel/series/{series_id}",
         )
 
-    match = NOVEL_ID_RE.search(raw_url)
-    if match:
-        novel_id = int(match.group(1))
-        return ParsedPixivUrl(
-            kind="novel",
-            pixiv_id=novel_id,
-            url=f"https://www.pixiv.net/novel/show.php?id={novel_id}",
-        )
-
     raise ValueError("Unsupported Pixiv novel URL")
+
+
+def _novel(novel_id: int) -> ParsedPixivUrl:
+    return ParsedPixivUrl(
+        kind="novel",
+        pixiv_id=novel_id,
+        url=f"https://www.pixiv.net/novel/show.php?id={novel_id}",
+    )
 
 
 class PixivClient:
@@ -263,7 +252,7 @@ class AuthenticatedPixivClient:
             pixiv_id=int(_attr(detail, "id", default=series_id)),
             source_url=source_url,
             original_title=_attr(detail, "title", default=f"Series {series_id}"),
-            author_name=_author_name(detail) or "Unknown",
+            author_name=_author_name(detail),
             description=_normalize_description(_attr(detail, "caption")),
             original_language=_attr(detail, "language"),
             chapters=chapters,

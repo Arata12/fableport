@@ -89,6 +89,100 @@ class JobQueueTests(unittest.TestCase):
             self.assertEqual(max_running, 1)
             self.assertEqual(manager.store.get(job1.id).status, "completed")
             self.assertEqual(manager.store.get(job2.id).status, "completed")
+            manager.shutdown()
+
+    def test_import_then_translate_triggers_colab_idle_stop(self) -> None:
+        from fanfictl.models import Chapter, ExportFormat
+        from fanfictl.storage import save_metadata
+
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings()
+            settings.output_dir = Path(tmp) / "output"
+            settings.colab_enabled = True
+            settings.colab_auto_stop = True
+            user_store = UserStore(settings)
+            key_store = APIKeyStore(settings, user_store)
+            user = user_store.get_admin()
+            self.assertIsNotNone(user)
+
+            idle_calls: list[bool] = []
+
+            class FakeColab:
+                def schedule_idle_stop(self, fn):
+                    idle_calls.append(fn())
+
+            manager = JobManager(
+                settings,
+                user_store=user_store,
+                key_store=key_store,
+                colab_manager=FakeColab(),
+            )
+
+            work = Work(
+                kind=WorkKind.NOVEL,
+                pixiv_id=42,
+                source_url="https://www.pixiv.net/novel/show.php?id=42",
+                public_id="pub42",
+                owner_user_id=user.id,
+                owner_username=user.username,
+                original_title="原題",
+                author_name="Author",
+                chapters=[
+                    Chapter(
+                        position=1,
+                        pixiv_novel_id=42,
+                        original_title="原題",
+                        source_markdown="# 原題\n\n本文\n",
+                    )
+                ],
+            )
+
+            def fake_import(url, cfg, **kwargs):
+                root = ensure_work_dirs(cfg.output_dir, work)
+                save_metadata(root, work)
+                return work, root
+
+            def fake_translate_stored(work_root, cfg, **kwargs):
+                work.translated_title = "Translated"
+                work.target_language = "Spanish"
+                work.chapters[0].translated_markdown = "# Translated\n\nTexto\n"
+                save_metadata(work_root, work)
+                return work, work_root
+
+            with (
+                patch("fanfictl.jobs.import_url_to_library", side_effect=fake_import),
+                patch(
+                    "fanfictl.jobs.translate_stored_work",
+                    side_effect=fake_translate_stored,
+                ),
+            ):
+                imp = manager.start_import_job(
+                    work.source_url, chapter_limit=None, owner_user=user
+                )
+                for _ in range(100):
+                    if manager.store.get(imp.id).status == "completed":
+                        break
+                    time.sleep(0.02)
+                imp_done = manager.store.get(imp.id)
+                self.assertEqual(imp_done.status, "completed")
+                self.assertEqual(imp_done.job_type, "import")
+                self.assertEqual(idle_calls, [])
+
+                tr = manager.start_translate_job(
+                    imp_done.work_root_name,
+                    resume=True,
+                    formats=[ExportFormat.MD],
+                    target_language="Spanish",
+                    owner_user=user,
+                )
+                for _ in range(100):
+                    if manager.store.get(tr.id).status == "completed":
+                        break
+                    time.sleep(0.02)
+                self.assertEqual(manager.store.get(tr.id).status, "completed")
+
+            self.assertEqual(idle_calls, [False])
+            manager.shutdown()
 
 
 if __name__ == "__main__":

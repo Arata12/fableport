@@ -1,25 +1,22 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from pathlib import Path
 import re
-from urllib.parse import urlparse
 from typing import Callable, Iterable
+from urllib.parse import urlparse
 
 import httpx
 
 from fanfictl.auth import UserRecord
+from fanfictl.colab import ColabManager
 from fanfictl.config import Settings
-from fanfictl.exporters import (
-    build_combined_markdown,
-    write_epub,
-    write_html,
-    write_markdown,
-    write_text,
-)
-from fanfictl.keystore import APIKeyStore
-from fanfictl.models import Checkpoint, ExportFormat, Work, WorkKind
+from fanfictl.content import normalize_target_language_name
+from fanfictl.exporters import export_work
+from fanfictl.keystore import APIKeyStore, RuntimeAPIKey
+from fanfictl.library import new_public_id
+from fanfictl.models import Checkpoint, ExportFormat, ParsedPixivUrl, Work
 from fanfictl.pixiv import (
     AuthenticatedPixivClient,
     PixivAccessError,
@@ -34,10 +31,36 @@ from fanfictl.storage import (
     save_checkpoint,
     save_metadata,
 )
-from fanfictl.translate import GeminiStudioProvider, translate_work
+from fanfictl.translate import LLMProvider, translate_work
 
 
 ProgressCallback = Callable[[str, int, int, str], None]
+
+
+def parse_pixiv_urls(raw_text: str) -> list[ParsedPixivUrl]:
+    """Parse one or more Pixiv novel/series URLs (or numeric IDs), one per line."""
+    parsed: list[ParsedPixivUrl] = []
+    seen: set[tuple[str, int]] = set()
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        item = parse_pixiv_url(line)
+        key = (item.kind, item.pixiv_id)
+        if key not in seen:
+            seen.add(key)
+            parsed.append(item)
+    if not parsed:
+        raise ValueError("Provide at least one Pixiv novel or series URL.")
+    return parsed
+
+
+def _fetch(
+    client: PixivClient | AuthenticatedPixivClient, kind: str, pixiv_id: int, url: str
+) -> Work:
+    if kind == "novel":
+        return client.fetch_novel_work(pixiv_id, url)
+    return client.fetch_series_work(pixiv_id, url)
 
 
 def fetch_work_from_url(
@@ -50,64 +73,81 @@ def fetch_work_from_url(
     parsed = parse_pixiv_url(url)
     client = PixivClient()
     try:
-        work = (
-            client.fetch_novel_work(parsed.pixiv_id, parsed.url)
-            if parsed.kind == "novel"
-            else client.fetch_series_work(parsed.pixiv_id, parsed.url)
-        )
+        work = _fetch(client, parsed.kind, parsed.pixiv_id, parsed.url)
     except PixivAccessError as public_error:
-        token_store = pixiv_token_store
-        tokens = token_store.runtime_tokens_for_user(owner_user) if token_store else []
+        tokens = (
+            pixiv_token_store.runtime_tokens_for_user(owner_user)
+            if pixiv_token_store
+            else []
+        )
         if not tokens:
             raise RuntimeError(
                 "This Pixiv work requires login to import. Add a Pixiv refresh token in Settings."
             ) from public_error
-        auth_client = AuthenticatedPixivClient(tokens)
-        work = (
-            auth_client.fetch_novel_work(parsed.pixiv_id, parsed.url)
-            if parsed.kind == "novel"
-            else auth_client.fetch_series_work(parsed.pixiv_id, parsed.url)
+        work = _fetch(
+            AuthenticatedPixivClient(tokens), parsed.kind, parsed.pixiv_id, parsed.url
         )
     finally:
         client.close()
 
-    if chapter_limit:
+    if chapter_limit and chapter_limit > 0:
         work.chapters = work.chapters[:chapter_limit]
     return work
 
 
-def translate_url_to_outputs(
+def _write_chapter_files(work: Work, work_root: Path) -> None:
+    chapter_root = work_root / "chapters"
+    chapter_root.mkdir(parents=True, exist_ok=True)
+    for chapter in work.chapters:
+        prefix = f"{chapter.position:03d}"
+        (chapter_root / f"{prefix}-source.md").write_text(
+            chapter.source_markdown, encoding="utf-8"
+        )
+        if chapter.translated_markdown:
+            (chapter_root / f"{prefix}-translated.md").write_text(
+                chapter.translated_markdown, encoding="utf-8"
+            )
+
+
+def _merge_existing_translations(work: Work, existing: Work | None) -> None:
+    """When re-importing an existing work (e.g. a series with new chapters),
+    preserve translations on chapters whose source text has not changed."""
+    if not existing:
+        return
+    work.public_id = existing.public_id or work.public_id
+    existing_by_id = {ch.pixiv_novel_id: ch for ch in existing.chapters}
+    any_preserved = False
+    for chapter in work.chapters:
+        prev = existing_by_id.get(chapter.pixiv_novel_id)
+        if prev and prev.is_translated and prev.source_markdown == chapter.source_markdown:
+            chapter.translated_title = prev.translated_title
+            chapter.translated_markdown = prev.translated_markdown
+            any_preserved = True
+    if any_preserved:
+        work.translated_title = existing.translated_title
+        work.translated_description = existing.translated_description
+        work.target_language = existing.target_language
+
+
+def import_url_to_library(
     url: str,
     settings: Settings,
     *,
-    target: str = "en",
     output: Path | None = None,
-    formats: Iterable[ExportFormat] = (
-        ExportFormat.MD,
-        ExportFormat.TXT,
-        ExportFormat.HTML,
-        ExportFormat.EPUB,
-    ),
-    resume: bool = False,
     chapter_limit: int | None = None,
-    model: str | None = None,
     progress_callback: ProgressCallback | None = None,
     owner_user: UserRecord | None = None,
-    key_store: APIKeyStore | None = None,
+    pixiv_token_store: PixivTokenStore | None = None,
+    preserve_translations: bool = True,
 ) -> tuple[Work, Path]:
-    if target.lower() != "en":
-        raise ValueError("v1 only supports English output")
-    key_store = key_store or APIKeyStore(settings)
-    pixiv_token_store = PixivTokenStore(settings)
-    runtime_keys = key_store.runtime_keys_for_user(owner_user)
-    if not runtime_keys:
-        raise RuntimeError(
-            "At least one Gemini API key is required. Put one in .env or add fallback keys in the web dashboard."
-        )
+    """Fetch a Pixiv novel or series and save its untranslated source locally."""
+    pixiv_token_store = pixiv_token_store or PixivTokenStore(settings)
 
-    if progress_callback:
-        progress_callback("fetching", 0, 0, "Fetching Pixiv work")
+    def progress(stage: str, current: int, total: int, detail: str) -> None:
+        if progress_callback:
+            progress_callback(stage, current, total, detail)
 
+    progress("fetching", 0, 0, "Fetching Pixiv work")
     work = fetch_work_from_url(
         url,
         chapter_limit=chapter_limit,
@@ -116,99 +156,246 @@ def translate_url_to_outputs(
     )
     work.owner_user_id = owner_user.id if owner_user else None
     work.owner_username = owner_user.username if owner_user else None
-    output_base = (output or settings.output_dir).resolve()
-    work_root = ensure_work_dirs(output_base, work)
-    existing_work = _load_existing_work(work_root)
-    if existing_work:
-        work.public_id = existing_work.public_id
-        work.owner_user_id = existing_work.owner_user_id
-        work.owner_username = existing_work.owner_username
-        if existing_work.translated_title and not resume:
-            work.translated_title = existing_work.translated_title
-        if existing_work.translated_description and not resume:
-            work.translated_description = existing_work.translated_description
-    checkpoint = load_checkpoint(work_root) if resume else None
-    if checkpoint is None:
-        checkpoint = Checkpoint(
-            source_url=work.source_url,
-            kind=work.kind,
-            pixiv_id=work.pixiv_id,
-            original_title=work.original_title,
-            model_name=model or settings.gemini_model,
-        )
 
-    provider = GeminiStudioProvider(
-        api_keys=runtime_keys,
-        model_name=model or settings.gemini_model,
-        quota_tracker=QuotaTracker(settings, runtime_keys),
+    # The output dir is keyed by kind, id and owner, so re-imports land in the
+    # same place and keep their public reader link.
+    work_root = ensure_work_dirs((output or settings.output_dir).resolve(), work)
+    existing_work = _load_existing_work(work_root)
+    work.public_id = (
+        existing_work.public_id
+        if existing_work and existing_work.public_id
+        else new_public_id()
     )
 
-    if progress_callback:
-        progress_callback("translating", 0, len(work.chapters), "Starting translation")
+    progress("assets", 0, len(work.chapters), "Saving source chapters and images")
+    _localize_pixiv_assets(work, work_root)
+    if preserve_translations:
+        _merge_existing_translations(work, existing_work)
+    _write_chapter_files(work, work_root)
+    save_metadata(work_root, work)
 
-    work = translate_work(
-        work,
-        provider,
-        checkpoint,
-        checkpoint_callback=lambda cp: save_checkpoint(work_root, cp),
+    total = len(work.chapters)
+    progress("completed", total, total, f"Imported {total} chapter(s)")
+    return work, work_root
+
+
+def _resolve_provider(
+    settings: Settings,
+    *,
+    model: str | None,
+    target_language: str,
+    owner_user: UserRecord | None,
+    key_store: APIKeyStore,
+    colab_manager: ColabManager | None,
+    progress_callback: ProgressCallback | None,
+) -> tuple[LLMProvider, str]:
+    if settings.colab_enabled or settings.provider_backend == "colab":
+        if not colab_manager:
+            raise RuntimeError(
+                "Managed Google Colab is enabled in Settings, but no Colab manager is active."
+            )
+        if not settings.colab_auto_start and colab_manager.status().state != "ready":
+            raise RuntimeError(
+                "Google Colab GPU is stopped and auto-start is off. Start Colab from the dashboard or Settings first."
+            )
+        endpoint = colab_manager.ensure_ready(progress_callback=progress_callback)
+        model_name = model or endpoint.model_name
+        provider = LLMProvider(
+            api_keys=[],
+            model_name=model_name,
+            host=endpoint.base_url,
+            quota_tracker=None,
+            api_mode=endpoint.api_mode,
+            target_language=target_language,
+            context_length=settings.context_length,
+            require_api_key=False,
+        )
+        return provider, model_name
+
+    runtime_keys: list[RuntimeAPIKey] = key_store.runtime_keys_for_user(owner_user)
+    if settings.requires_api_key and not runtime_keys:
+        raise RuntimeError(
+            "At least one API key is required for Ollama Cloud. Add a key in Settings or switch to a local server / Google Colab."
+        )
+    model_name = model or settings.ollama_model
+    is_cloud = settings.provider_backend == "ollama_cloud"
+    host = "https://ollama.com" if is_cloud else settings.ollama_host
+    api_mode = "ollama" if is_cloud else ("openai" if settings.api_mode == "openai" else "ollama")
+    # Local Ollama defaults to 4096 num_ctx unless specified; raise default to 32k locally.
+    effective_ctx = settings.context_length
+    if not is_cloud and api_mode == "ollama" and effective_ctx == 0:
+        effective_ctx = 32768
+    tracker = QuotaTracker(settings, runtime_keys) if runtime_keys else None
+    provider = LLMProvider(
+        api_keys=runtime_keys,
+        model_name=model_name,
+        host=host,
+        quota_tracker=tracker,
+        api_mode=api_mode,
+        target_language=target_language,
+        context_length=effective_ctx,
+        require_api_key=settings.requires_api_key,
+    )
+    return provider, model_name
+
+
+def translate_stored_work(
+    work_root: Path,
+    settings: Settings,
+    *,
+    formats: Iterable[ExportFormat] = tuple(ExportFormat),
+    resume: bool = True,
+    model: str | None = None,
+    target_language: str | None = None,
+    refresh_source: bool = False,
+    chapter_limit: int | None = None,
+    progress_callback: ProgressCallback | None = None,
+    owner_user: UserRecord | None = None,
+    key_store: APIKeyStore | None = None,
+    pixiv_token_store: PixivTokenStore | None = None,
+    colab_manager: ColabManager | None = None,
+) -> tuple[Work, Path]:
+    """Translate an already-imported work stored on disk."""
+    key_store = key_store or APIKeyStore(settings)
+    pixiv_token_store = pixiv_token_store or PixivTokenStore(
+        settings, key_store.user_store
+    )
+    work = _load_existing_work(work_root)
+    if not work:
+        raise RuntimeError(f"Work not found at {work_root}")
+
+    if refresh_source:
+        work, work_root = import_url_to_library(
+            work.source_url,
+            settings,
+            output=work_root.parent,
+            chapter_limit=chapter_limit,
+            progress_callback=progress_callback,
+            owner_user=owner_user,
+            pixiv_token_store=pixiv_token_store,
+            preserve_translations=resume,
+        )
+
+    lang = normalize_target_language_name(target_language or settings.target_language)
+
+    def progress(stage: str, current: int, total: int, detail: str) -> None:
+        if progress_callback:
+            progress_callback(stage, current, total, detail)
+
+    provider, model_name = _resolve_provider(
+        settings,
+        model=model,
+        target_language=lang,
+        owner_user=owner_user,
+        key_store=key_store,
+        colab_manager=colab_manager,
         progress_callback=progress_callback,
     )
 
-    save_checkpoint(work_root, checkpoint)
-    save_metadata(work_root, work)
-    _localize_pixiv_assets(work, work_root)
+    existing_cp = load_checkpoint(work_root) if resume else None
+    if existing_cp and (
+        existing_cp.target_language.strip().lower() != lang.strip().lower()
+    ):
+        existing_cp = None
 
-    for chapter in work.chapters:
-        chapter_root = work_root / "chapters"
-        (chapter_root / f"{chapter.position:03d}-source.md").write_text(
-            chapter.source_markdown,
-            encoding="utf-8",
-        )
-        if chapter.translated_markdown:
-            (chapter_root / f"{chapter.position:03d}-translated.md").write_text(
-                chapter.translated_markdown,
-                encoding="utf-8",
-            )
+    if not existing_cp:
+        work.translated_title = None
+        work.translated_description = None
+        for chapter in work.chapters:
+            chapter.translated_title = None
+            chapter.translated_markdown = None
 
-    if progress_callback:
-        progress_callback(
-            "exporting", len(work.chapters), len(work.chapters), "Rendering exports"
-        )
+    checkpoint = existing_cp or Checkpoint(
+        source_url=work.source_url,
+        kind=work.kind,
+        pixiv_id=work.pixiv_id,
+        original_title=work.original_title,
+        target_language=lang,
+        model_name=model_name,
+    )
+    checkpoint.target_language = lang
+    checkpoint.model_name = model_name
 
-    combined_markdown = build_combined_markdown(work)
-    title = work.translated_title or work.original_title
-    formats = set(formats)
-    if ExportFormat.MD in formats:
-        write_markdown(
-            work_root
-            / ("translated.md" if work.kind == WorkKind.NOVEL else "combined.md"),
-            combined_markdown,
-        )
-    if ExportFormat.TXT in formats:
-        write_text(
-            work_root
-            / ("translated.txt" if work.kind == WorkKind.NOVEL else "combined.txt"),
-            combined_markdown,
-        )
-    if ExportFormat.HTML in formats:
-        write_html(
-            work_root
-            / ("translated.html" if work.kind == WorkKind.NOVEL else "combined.html"),
-            combined_markdown,
-            title,
-        )
-    if ExportFormat.EPUB in formats:
-        write_epub(
-            work_root
-            / ("translated.epub" if work.kind == WorkKind.NOVEL else "combined.epub"),
+    def persist_partial(current_work: Work) -> None:
+        current_work.target_language = lang
+        _write_chapter_files(current_work, work_root)
+        save_metadata(work_root, current_work)
+
+    progress("translating", 0, len(work.chapters), f"Starting translation ({lang})")
+    try:
+        work = translate_work(
             work,
+            provider,
+            checkpoint,
+            checkpoint_callback=lambda cp: save_checkpoint(work_root, cp),
+            progress_callback=progress_callback,
+            chapter_callback=persist_partial,
+            max_workers=settings.translation_concurrency,
+        )
+    finally:
+        provider.close()
+
+    work.target_language = lang
+    save_checkpoint(work_root, checkpoint)
+    _write_chapter_files(work, work_root)
+
+    total = len(work.chapters)
+    save_metadata(work_root, work)
+    progress("exporting", total, total, "Rendering exports")
+    export_work(work, work_root, set(formats))
+    progress("completed", total, total, "Done")
+    return work, work_root
+
+
+def translate_url_to_outputs(
+    url: str,
+    settings: Settings,
+    *,
+    output: Path | None = None,
+    formats: Iterable[ExportFormat] = tuple(ExportFormat),
+    resume: bool = False,
+    chapter_limit: int | None = None,
+    model: str | None = None,
+    target_language: str | None = None,
+    progress_callback: ProgressCallback | None = None,
+    owner_user: UserRecord | None = None,
+    key_store: APIKeyStore | None = None,
+    pixiv_token_store: PixivTokenStore | None = None,
+    colab_manager: ColabManager | None = None,
+) -> tuple[Work, Path]:
+    key_store = key_store or APIKeyStore(settings)
+    pixiv_token_store = pixiv_token_store or PixivTokenStore(
+        settings, key_store.user_store
+    )
+    if settings.requires_api_key and not key_store.runtime_keys_for_user(owner_user):
+        raise RuntimeError(
+            "At least one API key is required for Ollama Cloud. Put OLLAMA_API_KEY in .env or add a key in the web dashboard."
         )
 
-    if progress_callback:
-        progress_callback("completed", len(work.chapters), len(work.chapters), "Done")
-
-    save_metadata(work_root, work)
-    return work, work_root
+    _work, work_root = import_url_to_library(
+        url,
+        settings,
+        output=output,
+        chapter_limit=chapter_limit,
+        progress_callback=progress_callback,
+        owner_user=owner_user,
+        pixiv_token_store=pixiv_token_store,
+        preserve_translations=resume,
+    )
+    return translate_stored_work(
+        work_root,
+        settings,
+        formats=formats,
+        resume=resume,
+        model=model,
+        target_language=target_language,
+        refresh_source=False,
+        progress_callback=progress_callback,
+        owner_user=owner_user,
+        key_store=key_store,
+        pixiv_token_store=pixiv_token_store,
+        colab_manager=colab_manager,
+    )
 
 
 def _load_existing_work(work_root: Path) -> Work | None:
@@ -261,8 +448,8 @@ def _download_embedded_pixiv_images(work: Work, work_root: Path) -> dict[str, st
                     response.raise_for_status()
                     target.write_bytes(response.content)
                 replacements[url] = target.relative_to(work_root).as_posix()
-            except Exception:  # noqa: BLE001
-                continue
+            except httpx.HTTPError:
+                continue  # Keep the remote URL if the download fails.
     return replacements
 
 

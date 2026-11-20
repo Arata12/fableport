@@ -1,7 +1,12 @@
 {% extends "base.html" %}
+{% from "icons.html" import icon %}
 {% block content %}
 <section class="panel panel--wide">
+  <p class="eyebrow">404</p>
   <h1>{{ title }}</h1>
-  <p class="muted">The requested page or work could not be found.</p>
+  <div class="empty">
+    <div class="empty__icon">{{ icon('book') }}</div>
+    <p>The requested page or work could not be found.</p>
+  </div>
 </section>
 {% endblock %}

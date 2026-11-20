@@ -78,8 +78,13 @@ def create_code_challenge(verifier: str) -> str:
 
 
 def extract_code(value: str) -> str | None:
-    if "accounts.pixiv.net/post-redirect" in value:
-        parsed = urllib.parse.urlparse(value)
+    import re
+
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if "accounts.pixiv.net/post-redirect" in cleaned:
+        parsed = urllib.parse.urlparse(cleaned)
         query = urllib.parse.parse_qs(parsed.query)
         nested = query.get("return_to", [None])[0]
         if nested:
@@ -93,13 +98,20 @@ def extract_code(value: str) -> str | None:
                 if decoded == current:
                     break
                 current = decoded
-    if "code=" in value:
-        parsed = urllib.parse.urlparse(value)
+    if "code=" in cleaned:
+        parsed = urllib.parse.urlparse(cleaned)
         query = urllib.parse.parse_qs(parsed.query)
-        return query.get("code", [None])[0]
-    if "://" in value or value.startswith("/"):
+        direct = query.get("code", [None])[0]
+        if direct:
+            return direct
+        # Also handle pasted DevTools console errors like:
+        # Failed to launch 'pixiv://account/login?code=XYZ&via=login' ...
+        match = re.search(r"[?&]code=([^&\s'\"<>]+)", cleaned)
+        if match:
+            return urllib.parse.unquote(match.group(1))
+    if "://" in cleaned or cleaned.startswith("/") or " " in cleaned:
         return None
-    return value or None
+    return cleaned or None
 
 
 def looks_like_intermediate_redirect(value: str) -> bool:

@@ -2,7 +2,8 @@ services:
   app:
     build:
       context: .
-    image: fanfictl:latest
+    image: fableport:local
+    container_name: fableport
     entrypoint: ["fableport-web"]
     restart: unless-stopped
     user: "1000:1000"
@@ -11,27 +12,35 @@ services:
         required: false
     environment:
       FANFICTL_OUTPUT_DIR: /app/output
-      APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL in .env}
-      APP_SECRET_KEY: ${APP_SECRET_KEY:?set APP_SECRET_KEY in .env}
-      ADMIN_USERNAME: ${ADMIN_USERNAME:?set ADMIN_USERNAME in .env}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemma-4-31b-it}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8000}
+      LLM_API_MODE: ${LLM_API_MODE:-ollama}
+      TARGET_LANGUAGE: ${TARGET_LANGUAGE:-English}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      OLLAMA_HOST: ${OLLAMA_HOST:-https://ollama.com}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:31b}
+      COLAB_ENABLED: ${COLAB_ENABLED:-false}
+      COLAB_GPU: ${COLAB_GPU:-L4}
+      COLAB_HIGH_MEM: ${COLAB_HIGH_MEM:-false}
+      COLAB_ENGINE: ${COLAB_ENGINE:-vllm}
+      COLAB_MODEL: ${COLAB_MODEL:-}
+      COLAB_EXTRA_ARGS: ${COLAB_EXTRA_ARGS:-}
+      COLAB_HF_TOKEN: ${COLAB_HF_TOKEN:-}
+      COLAB_AUTO_START: ${COLAB_AUTO_START:-true}
+      COLAB_AUTO_STOP: ${COLAB_AUTO_STOP:-true}
+      COLAB_IDLE_STOP_MINUTES: ${COLAB_IDLE_STOP_MINUTES:-0}
       HOST: 0.0.0.0
       PORT: 8000
+    ports:
+      - "${APP_LISTEN:-127.0.0.1:8000}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - fanfictl_data:/app/output
-    labels:
-      caddy: ${APP_DOMAIN:?set APP_DOMAIN in .env}
-      caddy.reverse_proxy: "{{upstreams 8000}}"
-    networks:
-      - default
-      - dockge_default
+      - fableport_data:/app/output
 
   cli:
     build:
       context: .
-    image: fanfictl:latest
+    image: fableport:local
     profiles: ["tools"]
     user: "1000:1000"
     env_file:
@@ -40,14 +49,16 @@ services:
     environment:
       FANFICTL_OUTPUT_DIR: /app/output
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8000}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemma-4-31b-it}
+      LLM_API_MODE: ${LLM_API_MODE:-ollama}
+      TARGET_LANGUAGE: ${TARGET_LANGUAGE:-English}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      OLLAMA_HOST: ${OLLAMA_HOST:-https://ollama.com}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:31b}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - fanfictl_data:/app/output
-
-networks:
-  dockge_default:
-    external: true
+      - fableport_data:/app/output
 
 volumes:
-  fanfictl_data:
+  fableport_data:
+    external: true

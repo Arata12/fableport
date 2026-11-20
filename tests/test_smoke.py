@@ -6,15 +6,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fanfictl.config import Settings
-from fanfictl.content import normalize_pixiv_text_to_markdown
-from fanfictl.exporters import (
-    build_combined_markdown,
-    write_epub,
-    write_html,
-    write_markdown,
-    write_text,
+from fanfictl.content import (
+    markdown_to_text,
+    normalize_pixiv_text_to_markdown,
+    normalize_translated_english_text,
 )
-from fanfictl.models import Chapter, Checkpoint, Work, WorkKind
+from fanfictl.exporters import build_combined_markdown, export_work
+from fanfictl.models import Chapter, Checkpoint, ExportFormat, Work, WorkKind
 from fanfictl.pixiv import PixivAccessError, parse_pixiv_url
 from fanfictl.pixiv_tokens import PixivTokenStore
 from fanfictl.storage import ensure_work_dirs, load_checkpoint, save_checkpoint
@@ -93,19 +91,33 @@ class SmokeTests(unittest.TestCase):
             self.assertIn("EN:\n# Chapter 1", combined)
             self.assertIsNotNone(load_checkpoint(root))
 
-            write_markdown(root / "translated.md", combined)
-            write_text(root / "translated.txt", combined)
-            write_html(
-                root / "translated.html",
-                combined,
-                translated.translated_title or translated.original_title,
-            )
-            write_epub(root / "translated.epub", translated)
+            export_work(translated, root, set(ExportFormat))
 
             self.assertTrue((root / "translated.md").exists())
             self.assertTrue((root / "translated.txt").exists())
             self.assertTrue((root / "translated.html").exists())
             self.assertTrue((root / "translated.epub").exists())
+
+    def test_parse_pixiv_url_rejects_garbage(self) -> None:
+        self.assertEqual(parse_pixiv_url("  123  ").pixiv_id, 123)
+        with self.assertRaises(ValueError):
+            parse_pixiv_url("https://www.pixiv.net/novel/show.php?id=abc")
+        with self.assertRaises(ValueError):
+            parse_pixiv_url("https://example.com/whatever")
+
+    def test_translated_text_keeps_markdown_structure(self) -> None:
+        value = normalize_translated_english_text(
+            "Scene one.\n\n---\n\n- a list item\n\n— Hello, he said.\n\n―― Quiet."
+        )
+        self.assertIn("\n---\n", value)
+        self.assertIn("- a list item", value)
+        self.assertIn('"Hello, he said."', value)
+        self.assertIn('"Quiet."', value)
+
+    def test_markdown_to_text_only_drops_rule_lines(self) -> None:
+        text = markdown_to_text("wait---what\n\n---\n\nnext")
+        self.assertIn("wait---what", text)
+        self.assertNotIn("\n---\n", text)
 
     def test_chunking(self) -> None:
         chunks = split_markdown_into_chunks("para1\n\npara2\n\npara3", max_chars=8)

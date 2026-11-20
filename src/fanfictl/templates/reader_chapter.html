@@ -3,13 +3,18 @@
 <article class="reader-shell">
   <header class="reader-head">
     <h1 class="reader-chapter-title">{{ chapter.translated_title or chapter.original_title }}</h1>
-    <p class="reader-meta"><a href="{{ entry.public_url_path }}">Back to series</a></p>
+    <p class="reader-meta"><a href="{{ entry.public_url_path }}">&larr; Back to series</a></p>
   </header>
-  <nav class="chapter-nav">
-    {% if chapter_no > 1 %}<a href="{{ entry.public_url_path }}/{{ chapter_no - 1 }}">Previous</a>{% else %}<span></span>{% endif %}
+  <nav class="chapter-nav" aria-label="Chapter navigation">
+    {% if chapter_no > 1 %}<a href="{{ entry.public_url_path }}/{{ chapter_no - 1 }}" rel="prev">&larr; Previous</a>{% else %}<span></span>{% endif %}
     <span class="muted">Chapter {{ chapter_no }} of {{ entry.work.chapters|length }}</span>
-    {% if chapter_no < entry.work.chapters|length %}<a href="{{ entry.public_url_path }}/{{ chapter_no + 1 }}">Next</a>{% else %}<span></span>{% endif %}
+    {% if chapter_no < entry.work.chapters|length %}<a href="{{ entry.public_url_path }}/{{ chapter_no + 1 }}" rel="next">Next &rarr;</a>{% else %}<span></span>{% endif %}
   </nav>
   <div class="reader-body">{{ body_html|safe }}</div>
+  <nav class="chapter-nav chapter-nav--bottom" aria-label="Chapter navigation">
+    {% if chapter_no > 1 %}<a href="{{ entry.public_url_path }}/{{ chapter_no - 1 }}" rel="prev">&larr; Previous</a>{% else %}<span></span>{% endif %}
+    <span class="muted">Chapter {{ chapter_no }} of {{ entry.work.chapters|length }}</span>
+    {% if chapter_no < entry.work.chapters|length %}<a href="{{ entry.public_url_path }}/{{ chapter_no + 1 }}" rel="next">Next &rarr;</a>{% else %}<a href="{{ entry.public_url_path }}">All chapters</a>{% endif %}
+  </nav>
 </article>
 {% endblock %}

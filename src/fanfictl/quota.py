@@ -4,7 +4,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Callable
 
 from fanfictl.config import Settings
@@ -77,12 +77,13 @@ class QuotaTracker:
                         ts for ts in key_state["request_timestamps"] if now - ts < 60
                     ]
 
-                    if key_state["daily_count"] >= self.settings.gemini_rpd_limit:
+                    rpd, rpm = self.settings.rpd_limit, self.settings.rpm_limit
+                    if rpd and key_state["daily_count"] >= rpd:
                         continue
 
-                    if (
-                        len(key_state["request_timestamps"])
-                        < self.settings.gemini_rpm_limit
+                    cooldown = key_state.get("cooldown_until", 0) - now
+                    if cooldown <= 0 and (
+                        not rpm or len(key_state["request_timestamps"]) < rpm
                     ):
                         key_state["request_timestamps"].append(now)
                         key_state["daily_count"] += 1
@@ -91,9 +92,12 @@ class QuotaTracker:
                         self._save_state(state)
                         return key
 
-                    candidate_wait = max(
-                        (key_state["request_timestamps"][0] + 60) - now, 0.25
+                    rpm_wait = (
+                        key_state["request_timestamps"][0] + 60 - now
+                        if rpm and len(key_state["request_timestamps"]) >= rpm
+                        else 0
                     )
+                    candidate_wait = max(cooldown, rpm_wait, 0.25)
                     wait_seconds = (
                         candidate_wait
                         if wait_seconds is None
@@ -104,16 +108,17 @@ class QuotaTracker:
 
             if wait_seconds is None:
                 raise DailyQuotaExceeded(
-                    f"Daily Gemini request limit reached across all keys ({self.settings.gemini_rpd_limit} per key)."
+                    f"Daily request limit reached across all keys ({self.settings.rpd_limit} per key)."
                 )
             self._sleep(wait_seconds)
 
     def record_quota_error(self, key_id: str, message: str) -> None:
+        """Mark the key as rate-limited by the API: unusable for the next minute."""
         with self._lock:
             state = self._normalize_state(self._load_state())
-            state["keys"].setdefault(key_id, self._empty_key_state())["last_error"] = (
-                message
-            )
+            key_state = state["keys"].setdefault(key_id, self._empty_key_state())
+            key_state["cooldown_until"] = self._now() + 60
+            key_state["last_error"] = message
             state["last_error"] = message
             self._save_state(state)
 
@@ -135,25 +140,24 @@ class QuotaTracker:
                         source=key.source,
                         is_default=key.is_default,
                         minute_used=minute_used,
-                        minute_limit=self.settings.gemini_rpm_limit,
+                        minute_limit=self.settings.rpm_limit,
                         daily_used=daily_used,
-                        daily_limit=self.settings.gemini_rpd_limit,
+                        daily_limit=self.settings.rpd_limit,
                         minute_remaining=max(
-                            self.settings.gemini_rpm_limit - minute_used, 0
+                            self.settings.rpm_limit - minute_used, 0
                         ),
-                        daily_remaining=max(
-                            self.settings.gemini_rpd_limit - daily_used, 0
-                        ),
+                        daily_remaining=max(self.settings.rpd_limit - daily_used, 0),
                         last_error=key_state.get("last_error"),
-                        available=daily_used < self.settings.gemini_rpd_limit,
+                        available=not self.settings.rpd_limit
+                        or daily_used < self.settings.rpd_limit,
                     )
                 )
 
             key_count = max(len(key_snapshots), 1)
             minute_used = sum(item.minute_used for item in key_snapshots)
             daily_used = sum(item.daily_used for item in key_snapshots)
-            minute_limit = self.settings.gemini_rpm_limit * key_count
-            daily_limit = self.settings.gemini_rpd_limit * key_count
+            minute_limit = self.settings.rpm_limit * key_count
+            daily_limit = self.settings.rpd_limit * key_count
             return QuotaSnapshot(
                 minute_used=minute_used,
                 minute_limit=minute_limit,
@@ -197,15 +201,11 @@ class QuotaTracker:
         atomic_write_text(self.path, json.dumps(state, indent=2))
 
     def _today_key(self) -> str:
-        return datetime.now(self.settings.quota_timezone).date().isoformat()
+        return datetime.now(UTC).date().isoformat()
 
     def _next_reset_iso(self) -> str:
-        now = datetime.now(self.settings.quota_timezone)
-        tomorrow = (now + timedelta(days=1)).date()
-        next_reset = datetime.combine(
-            tomorrow, datetime.min.time(), tzinfo=self.settings.quota_timezone
-        )
-        return next_reset.isoformat()
+        tomorrow = (datetime.now(UTC) + timedelta(days=1)).date()
+        return f"{tomorrow.isoformat()} 00:00 UTC"
 
     @staticmethod
     def _empty_key_state() -> dict:

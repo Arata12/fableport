@@ -20,6 +20,10 @@ class Chapter(BaseModel):
     source_markdown: str
     translated_markdown: str | None = None
 
+    @property
+    def is_translated(self) -> bool:
+        return bool(self.translated_markdown and self.translated_markdown.strip())
+
 
 class Work(BaseModel):
     kind: WorkKind
@@ -34,7 +38,27 @@ class Work(BaseModel):
     description: str = ""
     translated_description: str | None = None
     original_language: str | None = None
+    target_language: str | None = None
     chapters: list[Chapter] = Field(default_factory=list)
+
+    @property
+    def translated_chapter_count(self) -> int:
+        return sum(1 for chapter in self.chapters if chapter.is_translated)
+
+    @property
+    def translation_status(self) -> Literal["untranslated", "partial", "translated"]:
+        if not self.chapters:
+            return "translated" if self.translated_title else "untranslated"
+        done = self.translated_chapter_count
+        if done == 0:
+            return "untranslated"
+        if done < len(self.chapters):
+            return "partial"
+        return "translated"
+
+    @property
+    def is_translated(self) -> bool:
+        return self.translation_status == "translated"
 
 
 class CheckpointChapter(BaseModel):

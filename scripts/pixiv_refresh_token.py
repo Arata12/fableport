@@ -5,6 +5,7 @@ import argparse
 import sys
 import webbrowser
 
+from fanfictl.keystore import mask_secret
 from fanfictl.pixiv_oauth import (
     create_oauth_session,
     exchange_code_for_token,
@@ -85,7 +86,7 @@ def print_token_result(payload: dict, *, show_secrets: bool) -> None:
     print()
     print("refresh_token:")
     refresh_token = payload.get("refresh_token", "")
-    print(refresh_token if show_secrets else mask_secret(refresh_token))
+    print(refresh_token if show_secrets else mask_secret(refresh_token, 8))
     print()
     print(
         "Use the refresh_token in Fableport Settings or in .env as PIXIV_REFRESH_TOKEN."
@@ -96,14 +97,6 @@ def print_token_result(payload: dict, *, show_secrets: bool) -> None:
         print(payload.get("access_token", ""))
     else:
         print("Use --show-secrets if you really need the raw tokens printed.")
-
-
-def mask_secret(value: str) -> str:
-    if not value:
-        return ""
-    if len(value) <= 12:
-        return "*" * len(value)
-    return f"{value[:8]}…{value[-4:]}"
 
 
 if __name__ == "__main__":

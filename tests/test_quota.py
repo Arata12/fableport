@@ -25,8 +25,8 @@ class QuotaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings()
             settings.output_dir = Path(tmp) / "output"
-            settings.gemini_rpm_limit = 2
-            settings.gemini_rpd_limit = 10
+            settings.rpm_limit = 2
+            settings.rpd_limit = 10
             clock = FakeClock()
             tracker = QuotaTracker(
                 settings,
@@ -48,8 +48,8 @@ class QuotaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings()
             settings.output_dir = Path(tmp) / "output"
-            settings.gemini_rpm_limit = 100
-            settings.gemini_rpd_limit = 2
+            settings.rpm_limit = 100
+            settings.rpd_limit = 2
             clock = FakeClock()
             tracker = QuotaTracker(
                 settings,
@@ -68,8 +68,8 @@ class QuotaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings()
             settings.output_dir = Path(tmp) / "output"
-            settings.gemini_rpm_limit = 1
-            settings.gemini_rpd_limit = 1
+            settings.rpm_limit = 1
+            settings.rpd_limit = 1
             clock = FakeClock()
             tracker = QuotaTracker(
                 settings,
@@ -86,6 +86,27 @@ class QuotaTests(unittest.TestCase):
 
             self.assertEqual(first.id, "k1")
             self.assertEqual(second.id, "k2")
+
+    def test_quota_error_cools_key_down_and_switches_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings()
+            settings.output_dir = Path(tmp) / "output"
+            settings.rpm_limit = 5
+            settings.rpd_limit = 100
+            clock = FakeClock()
+            tracker = QuotaTracker(
+                settings,
+                [
+                    RuntimeAPIKey(id="k1", key="a", source="env", is_default=True),
+                    RuntimeAPIKey(id="k2", key="b", source="stored", is_default=False),
+                ],
+                now_func=clock.time,
+                sleep_func=clock.sleep,
+            )
+
+            self.assertEqual(tracker.acquire_request_slot().id, "k1")
+            tracker.record_quota_error("k1", "429 RESOURCE_EXHAUSTED")
+            self.assertEqual(tracker.acquire_request_slot().id, "k2")
 
 
 if __name__ == "__main__":

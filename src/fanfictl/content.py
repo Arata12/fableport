@@ -34,7 +34,7 @@ def normalize_pixiv_text_to_markdown(
     content = JUMP_RE.sub(
         lambda m: f"[Jump to section {m.group(1)}](#jump-{m.group(1)})", content
     )
-    content = _collapse_whitespace(content).strip()
+    content = re.sub(r"\n{4,}", "\n\n\n", content).strip()
 
     if chapter_title:
         return f"# {chapter_title}\n\n{content}\n"
@@ -43,7 +43,7 @@ def normalize_pixiv_text_to_markdown(
 
 def markdown_to_text(markdown: str) -> str:
     text = re.sub(r"^#{1,6}\s*", "", markdown, flags=re.MULTILINE)
-    text = text.replace("---", "\n")
+    text = re.sub(r"^---$", "", text, flags=re.MULTILINE)
     text = re.sub(r"!\[(.*?)\]\((.*?)\)", r"[Image: \1] (\2)", text)
     text = re.sub(r"\[(.*?)\]\((.*?)\)", r"\1 (\2)", text)
     text = re.sub(r"<ruby>(.*?)<rt>(.*?)</rt></ruby>", r"\1 (\2)", text)
@@ -81,12 +81,100 @@ TRANSLATED_DOUBLE_QUOTES = str.maketrans(
     }
 )
 
+JAPANESE_BRACKET_QUOTES = str.maketrans(
+    {
+        "「": '"',
+        "」": '"',
+        "『": '"',
+        "』": '"',
+    }
+)
+
+_LANGUAGE_CODES = {
+    "english": "en",
+    "en": "en",
+    "ingles": "en",
+    "inglés": "en",
+    "spanish": "es",
+    "es": "es",
+    "español": "es",
+    "espanol": "es",
+    "french": "fr",
+    "fr": "fr",
+    "français": "fr",
+    "francais": "fr",
+    "portuguese": "pt",
+    "pt": "pt",
+    "português": "pt",
+    "portugues": "pt",
+    "german": "de",
+    "de": "de",
+    "deutsch": "de",
+    "italian": "it",
+    "it": "it",
+    "italiano": "it",
+    "japanese": "ja",
+    "ja": "ja",
+    "chinese": "zh",
+    "zh": "zh",
+    "korean": "ko",
+    "ko": "ko",
+    "russian": "ru",
+    "ru": "ru",
+}
+
+
+def language_code_for(target_language: str | None) -> str:
+    if not target_language:
+        return "en"
+    key = target_language.strip().lower()
+    if key in _LANGUAGE_CODES:
+        return _LANGUAGE_CODES[key]
+    if len(key) == 2 and key.isalpha():
+        return key
+    return "en"
+
+
+def normalize_target_language_name(value: str | None) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return "English"
+    low = cleaned.lower()
+    aliases = {
+        "en": "English",
+        "es": "Spanish",
+        "fr": "French",
+        "pt": "Portuguese",
+        "de": "German",
+        "it": "Italian",
+        "ja": "Japanese",
+        "zh": "Chinese",
+        "ko": "Korean",
+        "ru": "Russian",
+    }
+    return aliases.get(low, cleaned)
+
+
+def normalize_translated_text(text: str, target_language: str = "English") -> str:
+    """Normalize punctuation according to the target language.
+
+    English prose normalizes Japanese brackets and dash-prefixed dialogue into
+    double quotes. Other languages (such as Spanish, where dialogue uses em
+    dashes `—` or angular quotes `«»`) keep their native conventions intact and
+    only clean stray Japanese corner brackets.
+    """
+    if language_code_for(target_language) == "en":
+        return normalize_translated_english_text(text)
+    if language_code_for(target_language) == "ja":
+        return text
+    return text.translate(JAPANESE_BRACKET_QUOTES)
+
 
 def normalize_translated_english_text(text: str) -> str:
     value = text.translate(TRANSLATED_DOUBLE_QUOTES)
     value = re.sub(r'"{2,}', '"', value)
     value = re.sub(
-        r"^[ \t]*[—–―-][ \t]*(.+)$",
+        r"^[ \t]*[—–―-]+[ \t]*(.+)$",
         _normalize_dialogue_dash_line,
         value,
         flags=re.MULTILINE,
@@ -96,14 +184,10 @@ def normalize_translated_english_text(text: str) -> str:
 
 def _normalize_dialogue_dash_line(match: re.Match[str]) -> str:
     body = match.group(1).strip()
-    if not body:
+    # Leave markdown structure alone: "---" scene breaks and "- item" lists.
+    if not any(ch.isalnum() for ch in body) or match.group(0).lstrip().startswith("- "):
         return match.group(0)
     attribution = re.match(r"^(.*?)(?:\s+[—–―-]\s+)(.+)$", body)
     if attribution:
         return f'"{attribution.group(1).strip()}" {attribution.group(2).strip()}'
     return f'"{body}"'
-
-
-def _collapse_whitespace(text: str) -> str:
-    text = re.sub(r"\n{4,}", "\n\n\n", text)
-    return text

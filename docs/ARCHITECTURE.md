@@ -27,10 +27,12 @@ The project has one shared Python core used by both:
 
 ### `translate.py`
 
-- wraps Google AI Studio access
-- translates titles, synopsis, and prose chunks
-- now supports multiple runtime keys
-- uses quota tracking and key fallback
+- calls the Ollama Cloud chat API (`POST https://ollama.com/api/chat`, `Authorization: Bearer <key>`)
+- translates prose chunks, then the work title and synopsis
+- chapter titles are taken from the translated `# heading` of each chapter (no extra request)
+- chapters of a series run in parallel (`TRANSLATION_CONCURRENCY`); chunks within a chapter stay sequential and get the tail of the previous translation as context
+- paragraphs longer than a chunk are split on line breaks; output cut at the token limit is retried in halves
+- supports multiple runtime keys, with quota tracking and key fallback (a 429 cools that key down for a minute)
 - normalizes dialogue quotes for English output
 
 ### `workflow.py`
