@@ -693,6 +693,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 request, user, error=error, status_code=400, active_tab="settings"
             )
         app.state.user_store.save_app_settings(updates)
+        app.state.jobs.notify_concurrency_changed()
         _set_flash(request, notice="Translation settings saved.")
         return RedirectResponse("/dashboard/settings", status_code=303)
 
@@ -882,6 +883,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def disconnect_colab(request: Request, csrf_token: str = Form(...)):
         require_user(request, admin=True)
         validate_csrf(request, csrf_token)
+        app.state.jobs.cancel_queued_translations(
+            "Google Colab was disconnected by user"
+        )
         app.state.colab.stop()
         app.state.colab.clear_adc_credentials()
         request.session.pop("colab_oauth_verifier", None)
@@ -931,8 +935,16 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     ):
         require_user(request, admin=True)
         validate_csrf(request, csrf_token)
+        cancelled = app.state.jobs.cancel_queued_translations(
+            "Colab GPU was stopped by user"
+        )
         app.state.colab.stop()
-        _set_flash(request, notice="Google Colab session stopped.")
+        msg = (
+            f"Google Colab session stopped (cancelled {cancelled} queued job(s))."
+            if cancelled
+            else "Google Colab session stopped."
+        )
+        _set_flash(request, notice=msg)
         return RedirectResponse(_safe_return_path(return_to), status_code=303)
 
     @app.post("/colab/usage")

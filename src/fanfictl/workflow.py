@@ -31,7 +31,7 @@ from fanfictl.storage import (
     save_checkpoint,
     save_metadata,
 )
-from fanfictl.translate import LLMProvider, translate_work
+from fanfictl.translate import LLMProvider, TranslationSlotPool, translate_work
 
 
 ProgressCallback = Callable[[str, int, int, str], None]
@@ -254,6 +254,7 @@ def translate_stored_work(
     key_store: APIKeyStore | None = None,
     pixiv_token_store: PixivTokenStore | None = None,
     colab_manager: ColabManager | None = None,
+    slot_pool: TranslationSlotPool | None = None,
 ) -> tuple[Work, Path]:
     """Translate an already-imported work stored on disk."""
     key_store = key_store or APIKeyStore(settings)
@@ -331,6 +332,7 @@ def translate_stored_work(
             progress_callback=progress_callback,
             chapter_callback=persist_partial,
             max_workers=settings.translation_concurrency,
+            slot_pool=slot_pool,
         )
     finally:
         provider.close()
@@ -362,6 +364,7 @@ def translate_url_to_outputs(
     key_store: APIKeyStore | None = None,
     pixiv_token_store: PixivTokenStore | None = None,
     colab_manager: ColabManager | None = None,
+    slot_pool: TranslationSlotPool | None = None,
 ) -> tuple[Work, Path]:
     key_store = key_store or APIKeyStore(settings)
     pixiv_token_store = pixiv_token_store or PixivTokenStore(
@@ -395,6 +398,7 @@ def translate_url_to_outputs(
         key_store=key_store,
         pixiv_token_store=pixiv_token_store,
         colab_manager=colab_manager,
+        slot_pool=slot_pool,
     )
 
 

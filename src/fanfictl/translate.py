@@ -4,8 +4,9 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Callable, Iterator, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -435,6 +436,35 @@ def _leading_heading(markdown: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+class TranslationSlotPool:
+    """Shared concurrency slot pool across both independent works and chapters."""
+
+    def __init__(self, limit_getter: Callable[[], int]) -> None:
+        self._limit_getter = limit_getter
+        self._cond = threading.Condition()
+        self._in_use = 0
+
+    def limit(self) -> int:
+        return max(1, int(self._limit_getter() or 1))
+
+    def notify(self) -> None:
+        with self._cond:
+            self._cond.notify_all()
+
+    @contextmanager
+    def acquire(self) -> Iterator[None]:
+        with self._cond:
+            while self._in_use >= self.limit():
+                self._cond.wait(timeout=1.0)
+            self._in_use += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._in_use -= 1
+                self._cond.notify_all()
+
+
 def translate_work(
     work: Work,
     provider: LLMProvider,
@@ -443,12 +473,13 @@ def translate_work(
     progress_callback: Callable[[str, int, int, str], None] | None = None,
     chapter_callback: Callable[[Work], None] | None = None,
     max_workers: int = 1,
+    slot_pool: TranslationSlotPool | None = None,
 ) -> Work:
     """Translate every chapter (several in parallel), then title and summary.
 
     Chunks inside a chapter stay sequential so each one gets the previous
-    translation as context; chapters are independent, so they run in parallel
-    (the QuotaTracker still enforces the per-key RPM/RPD limits).
+    translation as context; chapters (and independent works when sharing a
+    slot_pool) run in parallel up to the configured concurrency limit.
     """
     total = len(work.chapters)
     lock = threading.Lock()
@@ -458,6 +489,14 @@ def translate_work(
     chunk_max_chars = (
         12000 if getattr(provider, "context_length", 0) >= 32768 else 8000
     )
+
+    @contextmanager
+    def use_slot() -> Iterator[None]:
+        if slot_pool is not None:
+            with slot_pool.acquire():
+                yield
+        else:
+            yield
 
     def report(stage: str, current: int, detail: str) -> None:
         if progress_callback:
@@ -483,64 +522,83 @@ def translate_work(
 
     def translate_chapter(chapter) -> None:
         nonlocal completed_chapters
+        if stop.is_set():
+            return
         state = states[chapter.position]
         chunks = split_markdown_into_chunks(
             chapter.source_markdown, max_chars=chunk_max_chars
         )
-        with lock:
-            active_chapters.add(chapter.position)
-            active_count = len(active_chapters)
-            done_now = completed_chapters
-        report(
-            "chapter",
-            done_now,
-            f"Translating {active_count} chapter(s) in parallel ({done_now}/{total} done)",
-        )
-        try:
-            previous = state.translated_chunks[-1] if state.translated_chunks else None
-            for index in range(len(state.translated_chunks), len(chunks)):
-                if stop.is_set():
-                    return
-                translated = provider.translate_chunk(
-                    chunks[index], previous_context=previous
-                )
-                with lock:
-                    state.translated_chunks.append(translated)
-                    done_now = completed_chapters
-                previous = translated
-                report(
-                    "chunk",
-                    done_now,
-                    f"Chapter {chapter.position}: chunk {index + 1}/{len(chunks)} ({done_now}/{total} chapters done)",
-                )
-                save()
-
+        # Fast path: chapter already completely translated in checkpoint.
+        if len(state.translated_chunks) >= len(chunks) and state.translated_title:
             chapter.translated_markdown = (
                 "\n\n".join(state.translated_chunks).strip() + "\n"
             )
-            if not state.translated_title:
-                # The chapter text starts with "# <title>", so its title is usually
-                # already translated: no extra request needed.
-                state.translated_title = _leading_heading(
-                    chapter.translated_markdown
-                ) or provider.translate_title(chapter.original_title)
-                save()
             chapter.translated_title = state.translated_title
-            save_chapter()
             with lock:
                 completed_chapters += 1
                 done_now = completed_chapters
-                active_chapters.discard(chapter.position)
-                active_count = len(active_chapters)
-            detail = (
-                f"Completed {done_now}/{total} chapters ({active_count} still running)"
-                if active_count
-                else f"Completed {done_now}/{total} chapters"
-            )
-            report("chapter", done_now, detail)
-        finally:
+            report("chapter", done_now, f"Resumed {done_now}/{total} chapters")
+            return
+
+        with use_slot():
+            if stop.is_set():
+                return
             with lock:
-                active_chapters.discard(chapter.position)
+                active_chapters.add(chapter.position)
+                active_count = len(active_chapters)
+                done_now = completed_chapters
+            report(
+                "chapter",
+                done_now,
+                f"Translating {active_count} chapter(s) in parallel ({done_now}/{total} done)",
+            )
+            try:
+                previous = (
+                    state.translated_chunks[-1] if state.translated_chunks else None
+                )
+                for index in range(len(state.translated_chunks), len(chunks)):
+                    if stop.is_set():
+                        return
+                    translated = provider.translate_chunk(
+                        chunks[index], previous_context=previous
+                    )
+                    with lock:
+                        state.translated_chunks.append(translated)
+                        done_now = completed_chapters
+                    previous = translated
+                    report(
+                        "chunk",
+                        done_now,
+                        f"Chapter {chapter.position}: chunk {index + 1}/{len(chunks)} ({done_now}/{total} chapters done)",
+                    )
+                    save()
+
+                chapter.translated_markdown = (
+                    "\n\n".join(state.translated_chunks).strip() + "\n"
+                )
+                if not state.translated_title:
+                    # The chapter text starts with "# <title>", so its title is usually
+                    # already translated: no extra request needed.
+                    state.translated_title = _leading_heading(
+                        chapter.translated_markdown
+                    ) or provider.translate_title(chapter.original_title)
+                    save()
+                chapter.translated_title = state.translated_title
+                save_chapter()
+                with lock:
+                    completed_chapters += 1
+                    done_now = completed_chapters
+                    active_chapters.discard(chapter.position)
+                    active_count = len(active_chapters)
+                detail = (
+                    f"Completed {done_now}/{total} chapters ({active_count} still running)"
+                    if active_count
+                    else f"Completed {done_now}/{total} chapters"
+                )
+                report("chapter", done_now, detail)
+            finally:
+                with lock:
+                    active_chapters.discard(chapter.position)
 
     pool = ThreadPoolExecutor(max_workers=max(1, max_workers))
     try:
@@ -565,18 +623,23 @@ def translate_work(
             ),
             None,
         )
-        checkpoint.translated_title = same_title or provider.translate_title(
-            work.original_title
-        )
+        if same_title:
+            checkpoint.translated_title = same_title
+        else:
+            with use_slot():
+                checkpoint.translated_title = provider.translate_title(
+                    work.original_title
+                )
         save()
     work.translated_title = checkpoint.translated_title
 
     if work.description:
         if not checkpoint.translated_description:
             report("summary", total, "Translating synopsis")
-            checkpoint.translated_description = provider.translate_description(
-                work.description
-            )
+            with use_slot():
+                checkpoint.translated_description = provider.translate_description(
+                    work.description
+                )
             save()
         work.translated_description = checkpoint.translated_description
 

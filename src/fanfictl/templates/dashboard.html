@@ -329,13 +329,13 @@
           </datalist>
         </label>
         <label>
-          <span>Parallel chapters</span>
+          <span>Parallel slots (works &amp; chapters)</span>
           <input name="translation_concurrency" type="number" min="1" max="16" value="{{ app_config.translation_concurrency }}" required>
         </label>
         <label>
           <span>Context window</span>
           <select name="context_length">
-            <option value="0"{% if app_config.context_length == 0 %} selected{% endif %}>Auto (by GPU &amp; parallel chapters)</option>
+            <option value="0"{% if app_config.context_length == 0 %} selected{% endif %}>Auto (by GPU &amp; parallel slots)</option>
             <option value="16384"{% if app_config.context_length == 16384 %} selected{% endif %}>16,384 tokens (16k)</option>
             <option value="32768"{% if app_config.context_length == 32768 %} selected{% endif %}>32,768 tokens (32k)</option>
             <option value="65536"{% if app_config.context_length == 65536 %} selected{% endif %}>65,536 tokens (64k)</option>

@@ -5,7 +5,7 @@ import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 from pydantic import BaseModel, Field
 
@@ -18,6 +18,7 @@ from fanfictl.models import ExportFormat
 from fanfictl.pixiv import parse_pixiv_url
 from fanfictl.pixiv_tokens import PixivTokenStore
 from fanfictl.storage import atomic_write_text
+from fanfictl.translate import TranslationSlotPool
 from fanfictl.workflow import (
     import_url_to_library,
     translate_stored_work,
@@ -141,13 +142,17 @@ class JobStore:
         ]
 
     def next_queued(
-        self, *, job_types: set[str] | None = None
+        self,
+        *,
+        job_types: set[str] | None = None,
+        exclude_predicate: Callable[[JobRecord], bool] | None = None,
     ) -> JobRecord | None:
         queued = [
             job
             for job in self.list_all()
             if job.status == "queued"
             and (job_types is None or job.job_type in job_types)
+            and (exclude_predicate is None or not exclude_predicate(job))
         ]
         return min(queued, key=lambda job: (job.created_at, job.id), default=None)
 
@@ -182,29 +187,57 @@ class JobManager:
         self.store = JobStore(settings.output_dir)
         self._import_cond = threading.Condition()
         self._translate_cond = threading.Condition()
+        self._dispatch_lock = threading.Lock()
+        self._running_translate_jobs: dict[str, threading.Thread] = {}
+        self._running_work_keys: set[tuple] = set()
+        self._translate_slot_pool = TranslationSlotPool(
+            lambda: self.settings.translation_concurrency
+        )
         self._stop_event = threading.Event()
         self.reconcile_stale_jobs()
         self._import_worker = threading.Thread(
-            target=self._worker_loop,
-            args=(_IMPORT_TYPES, self._import_cond),
+            target=self._import_worker_loop,
             daemon=True,
             name="fableport-import-worker",
         )
         self._translate_worker = threading.Thread(
-            target=self._worker_loop,
-            args=(_TRANSLATE_TYPES, self._translate_cond),
+            target=self._translate_dispatcher_loop,
             daemon=True,
-            name="fableport-translate-worker",
+            name="fableport-translate-dispatcher",
         )
         self._import_worker.start()
         self._translate_worker.start()
 
     def shutdown(self) -> None:
         self._stop_event.set()
+        self._translate_slot_pool.notify()
         with self._import_cond:
             self._import_cond.notify_all()
         with self._translate_cond:
             self._translate_cond.notify_all()
+
+    def notify_concurrency_changed(self) -> None:
+        self._translate_slot_pool.notify()
+        with self._translate_cond:
+            self._translate_cond.notify_all()
+
+    def cancel_queued_translations(
+        self, reason: str = "Colab GPU was stopped by user"
+    ) -> int:
+        cancelled = 0
+        with self._dispatch_lock:
+            for job in self.store.list_all():
+                if job.status == "queued" and job.job_type in _TRANSLATE_TYPES:
+                    job.status = "failed"
+                    job.current_step = "cancelled"
+                    job.error_message = reason
+                    job.message = reason
+                    job.finished_at = utc_now()
+                    self.store.save(job)
+                    cancelled += 1
+        with self._translate_cond:
+            self._translate_cond.notify_all()
+        return cancelled
 
     def reconcile_stale_jobs(self) -> None:
         for job in self.store.list_all():
@@ -220,6 +253,9 @@ class JobManager:
                 self.store.save(job)
 
     def has_active_translation_jobs(self) -> bool:
+        with self._dispatch_lock:
+            if self._running_translate_jobs:
+                return True
         return any(
             job.status in {"queued", "running"} and job.job_type in _TRANSLATE_TYPES
             for job in self.store.list_all()
@@ -361,36 +397,95 @@ class JobManager:
                 return job
         return None
 
-    def _worker_loop(
-        self, job_types: set[str], condition: threading.Condition
-    ) -> None:
+    @staticmethod
+    def _work_key(job: JobRecord) -> tuple:
+        if job.work_root_name:
+            return ("root", job.work_root_name)
+        if job.work_kind and job.pixiv_id is not None:
+            return ("pixiv", job.work_kind, job.pixiv_id, job.owner_user_id)
+        return ("job", job.id)
+
+    def _import_worker_loop(self) -> None:
         while not self._stop_event.is_set():
-            job = self.store.next_queued(job_types=job_types)
+            job = self.store.next_queued(job_types=_IMPORT_TYPES)
             if not job:
-                with condition:
-                    condition.wait(timeout=10.0)
+                with self._import_cond:
+                    self._import_cond.wait(timeout=10.0)
                 continue
             self._run_job(job.id)
+
+    def _translate_dispatcher_loop(self) -> None:
+        while not self._stop_event.is_set():
+            thread_to_start: threading.Thread | None = None
+            with self._dispatch_lock:
+                max_parallel = max(1, int(self.settings.translation_concurrency or 1))
+                if len(self._running_translate_jobs) < max_parallel:
+                    candidate = self.store.next_queued(
+                        job_types=_TRANSLATE_TYPES,
+                        exclude_predicate=lambda j: self._work_key(j)
+                        in self._running_work_keys,
+                    )
+                    if candidate:
+                        work_key = self._work_key(candidate)
+                        candidate.status = "running"
+                        candidate.current_step = "starting"
+                        candidate.message = "Starting translation"
+                        candidate.started_at = utc_now()
+                        self.store.save(candidate)
+                        self._running_work_keys.add(work_key)
+                        thread = threading.Thread(
+                            target=self._run_translate_job,
+                            args=(candidate.id, work_key),
+                            daemon=True,
+                            name=f"fableport-translate-{candidate.id[:6]}",
+                        )
+                        self._running_translate_jobs[candidate.id] = thread
+                        thread_to_start = thread
+            if thread_to_start is not None:
+                thread_to_start.start()
+                continue
+            with self._translate_cond:
+                self._translate_cond.wait(timeout=1.0)
+
+    def _run_translate_job(self, job_id: str, work_key: tuple) -> None:
+        try:
+            self._run_job(
+                job_id,
+                already_marked_running=True,
+                slot_pool=self._translate_slot_pool,
+            )
+        finally:
+            with self._dispatch_lock:
+                self._running_translate_jobs.pop(job_id, None)
+                self._running_work_keys.discard(work_key)
+            with self._translate_cond:
+                self._translate_cond.notify_all()
             if (
-                job_types == _TRANSLATE_TYPES
-                and self.colab_manager
+                self.colab_manager
                 and self.settings.colab_enabled
                 and not self.has_active_translation_jobs()
             ):
                 self.colab_manager.schedule_idle_stop(self.has_active_translation_jobs)
 
-    def _run_job(self, job_id: str) -> None:
+    def _run_job(
+        self,
+        job_id: str,
+        *,
+        already_marked_running: bool = False,
+        slot_pool: TranslationSlotPool | None = None,
+    ) -> None:
         job = self.store.get(job_id)
         if not job:
             return
 
-        job.status = "running"
-        job.current_step = "starting"
-        job.message = (
-            "Starting import" if job.job_type == "import" else "Starting translation"
-        )
-        job.started_at = utc_now()
-        self.store.save(job)
+        if not already_marked_running:
+            job.status = "running"
+            job.current_step = "starting"
+            job.message = (
+                "Starting import" if job.job_type == "import" else "Starting translation"
+            )
+            job.started_at = utc_now()
+            self.store.save(job)
 
         owner_user = (
             self.user_store.get_user(job.owner_user_id) if job.owner_user_id else None
@@ -424,6 +519,7 @@ class JobManager:
                     key_store=self.key_store,
                     pixiv_token_store=self.pixiv_token_store,
                     colab_manager=self.colab_manager,
+                    slot_pool=slot_pool,
                     progress_callback=lambda *args: self._update_progress(job_id, *args),
                 )
             else:
@@ -439,6 +535,7 @@ class JobManager:
                     key_store=self.key_store,
                     pixiv_token_store=self.pixiv_token_store,
                     colab_manager=self.colab_manager,
+                    slot_pool=slot_pool,
                     progress_callback=lambda *args: self._update_progress(job_id, *args),
                 )
 
